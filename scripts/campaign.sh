@@ -46,9 +46,10 @@ strict_eval() {
   # $1=model.zip $2=vecnormalize.pkl $3=out_prefix
   # prints "w r h" = win rates averaged over 2 strict evals; empty on failure
   local m="$1" v="$2" o="$3"
-  ./scripts/eval_roster.py "$m" "$v" --bots wanderer rusher hunter \
+  # NOTE: eval_roster.py has no shebang; invoke via the venv python explicitly.
+  .venv/bin/python scripts/eval_roster.py "$m" "$v" --bots wanderer rusher hunter \
     --episodes 20 --arena open --out "${o}_1.json" > /dev/null 2>&1 || return 1
-  ./scripts/eval_roster.py "$m" "$v" --bots wanderer rusher hunter \
+  .venv/bin/python scripts/eval_roster.py "$m" "$v" --bots wanderer rusher hunter \
     --episodes 20 --arena open --out "${o}_2.json" > /dev/null 2>&1 || return 1
   .venv/bin/python - "$o" <<'PYEOF' 2>/dev/null || return 1
 import json, sys
