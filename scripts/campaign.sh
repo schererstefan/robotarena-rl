@@ -31,7 +31,7 @@ SEED_DIR="${1:?usage: scripts/campaign.sh <seed_dir> [max_runs]}"
 MAX_RUNS="${2:-50}"
 PATIENCE=10
 TIMESTEPS=8000000
-CONFIG="configs/ppo_continue.yaml"
+CONFIG="${CONFIG:-configs/ppo_continue.yaml}"  # override: CONFIG=configs/ppo_continue_hard.yaml ./scripts/campaign.sh ...
 # Full 17-bot game roster (base 8 + 9 hardened champions), for tournament eval.
 # The strict champion-bar eval stays on wanderer/rusher/hunter only.
 FULL_ROSTER="wanderer rusher hunter orbiter sniper brawler ghost turret wanderer-hc1 rusher-hc1 hunter-hc1 hunter-hc2 orbiter-hc1 turret-hc1 sniper-hc1 brawler-hc1 ghost-hc1"
