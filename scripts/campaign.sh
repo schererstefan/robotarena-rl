@@ -13,7 +13,7 @@
 #      on the run's best_roster.zip. This is the ONLY metric used for
 #      cross-run checkpoint selection -- in-training evals overstated rusher
 #      performance before, so they are not trusted here.
-#   4. Elo tournament: python -m rl.evaluate, 20 eps/bot x6 bots (recorded).
+#   4. Elo tournament: python -m rl.evaluate, 20 eps/bot x17 bots (recorded).
 #   5. score = min strict win rate over (wanderer, rusher, hunter), averaged
 #      over the two evals; new global best iff score strictly improves.
 #
@@ -32,6 +32,9 @@ MAX_RUNS="${2:-50}"
 PATIENCE=10
 TIMESTEPS=8000000
 CONFIG="configs/ppo_continue.yaml"
+# Full 17-bot game roster (base 8 + 9 hardened champions), for tournament eval.
+# The strict champion-bar eval stays on wanderer/rusher/hunter only.
+FULL_ROSTER="wanderer rusher hunter orbiter sniper brawler ghost turret wanderer-hc1 rusher-hc1 hunter-hc1 hunter-hc2 orbiter-hc1 turret-hc1 sniper-hc1 brawler-hc1 ghost-hc1"
 
 CAMP="runs/campaign"
 BEST="$CAMP/best"
@@ -63,7 +66,7 @@ tourney_eval() {
   # $1=model.zip $2=vecnormalize.pkl $3=out.json -> prints agent elo, empty on failure
   local m="$1" v="$2" o="$3"
   .venv/bin/python -m rl.evaluate --model "$m" --vecnormalize "$v" \
-    --episodes 20 --out "$o" > /dev/null 2>&1 || return 1
+    --bots $FULL_ROSTER --episodes 20 --out "$o" > /dev/null 2>&1 || return 1
   .venv/bin/python -c "import json; print(json.load(open('$o'))['agent_elo'])" 2>/dev/null || return 1
 }
 
