@@ -142,17 +142,17 @@ for (( i=1; i<=MAX_RUNS; i++ )); do
     cp "$rundir/eval_strict_1.json" "$BEST/eval_strict_1.json"
     cp "$rundir/eval_strict_2.json" "$BEST/eval_strict_2.json"
     cp "$rundir/elo.json" "$BEST/elo.json"
-    BEST_W=$w; BEST_R=$r; BEST_H=$h; BEST_ELO=$elo; BEST_SCORE=$score
+    BEST_W=$w; BEST_R=$r; BEST_H=$h; BEST_ELO=$ELO; BEST_SCORE=$score
     no_improve=0
-    log "iter $i: NEW GLOBAL BEST score=$score (w=$w r=$r h=$h) elo=$elo"
+    log "iter $i: NEW GLOBAL BEST score=$score (w=$w r=$r h=$h) elo=$ELO"
   else
     no_improve=$((no_improve+1))
-    log "iter $i: score=$score (w=$w r=$r h=$h) elo=$elo -- no improvement ($no_improve/$PATIENCE)"
+    log "iter $i: score=$score (w=$w r=$r h=$h) elo=$ELO -- no improvement ($no_improve/$PATIENCE)"
   fi
-  echo "{\"iter\": $i, \"rundir\": \"$rundir\", \"w\": $w, \"r\": $r, \"h\": $h, \"score\": $score, \"elo\": \"$elo\", \"improved\": $improved}" \
+  echo "{\"iter\": $i, \"rundir\": \"$rundir\", \"w\": $w, \"r\": $r, \"h\": $h, \"score\": $score, \"elo\": \"$ELO\", \"improved\": $improved}" \
     >> "$CAMP/results.jsonl"
   write_status "$i" "$BEST_SCORE" "$BEST_W" "$BEST_R" "$BEST_H" "$BEST_ELO" \
-    "last iter score=$score (w=$w r=$r h=$h) elo=$elo"
+    "last iter score=$score (w=$w r=$r h=$h) elo=$ELO"
 
   # CHAMPION GATE (strict): EVERY opponent in BOTH independent 20-episode
   # strict evals must exceed 0.80. Averages are NOT used here -- a weak
