@@ -1,13 +1,12 @@
-#!/usr/bin/env python3
-"""Deterministic roster eval: N episodes per scripted bot, raw JSON out.
-
-Mirrors the in-training WinRateEvalCallback (deterministic policy, same
-VecNormalize handling) but as a standalone script so any model.zip can be
-evaluated after the fact, with results persisted as JSON.
+"""Deterministic roster evaluation for a trained PPO policy.
 
 Usage:
     .venv/bin/python scripts/eval_roster.py runs/<run>/model.zip runs/<run>/vecnormalize.pkl \
         --bots wanderer rusher hunter --episodes 20 --out runs/<run>/eval_roster.json
+
+The AGENT fights with --loadout (default: the canonical DEFAULT_EVAL_LOADOUT
+from rl.evaluate, matching training and the in-training WinRateEvalCallback).
+Scripted opponents always keep their registry loadout (see bridge).
 """
 import argparse
 import json
@@ -22,6 +21,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from rl.env import RobotArenaEnv
+from rl.evaluate import DEFAULT_EVAL_LOADOUT
 
 
 def eval_bot(model, vecnorm_path, bot, episodes, arena, loadout):
@@ -59,10 +59,16 @@ def main():
                     default=["wanderer", "rusher", "hunter"])
     ap.add_argument("--episodes", type=int, default=20)
     ap.add_argument("--arena", default="open")
+    ap.add_argument("--loadout", default=None,
+                    help='JSON object for the AGENT loadout, e.g. '
+                         '\'{"overdrive":2,"trigger":2,"plating":2}\'. '
+                         'Default: canonical DEFAULT_EVAL_LOADOUT. '
+                         'Scripted opponents always keep their registry loadout.')
     ap.add_argument("--out", default=None, help="write raw JSON results here")
     args = ap.parse_args()
 
     model = PPO.load(args.model)
+    loadout = json.loads(args.loadout) if args.loadout else dict(DEFAULT_EVAL_LOADOUT)
     results = {
         "model": os.path.abspath(args.model),
         "vecnormalize": (os.path.abspath(args.vecnormalize)
@@ -70,13 +76,14 @@ def main():
         "bots": args.bots,
         "episodes_per_bot": args.episodes,
         "arena": args.arena,
+        "loadout": loadout,
         "deterministic": True,
         "ts": time.time(),
         "results": {},
     }
     for bot in args.bots:
         r = eval_bot(model, args.vecnormalize, bot, args.episodes,
-                     args.arena, {})
+                     args.arena, loadout)
         results["results"][bot] = r
         print(f"{bot}: W{r['wins']} L{r['losses']} D{r['draws']} "
               f"win_rate={r['win_rate']:.2f}", flush=True)

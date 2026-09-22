@@ -1,0 +1,70 @@
+# Continue stage: resume the hunter-focus best_roster policy and push the last
+# mile toward the champion bar (>80% deterministic vs each of wanderer, rusher,
+# hunter, 20 eps/bot, canonical level-2 eval loadout).
+#
+# CONTEXT (Sep 22, 2026): the previous "verified" numbers were measured with a
+# loadout BUG — scripts/eval_roster.py hardcoded loadout={} for the agent while
+# training and the in-training WinRateEvalCallback used
+# {overdrive:2, trigger:2, plating:2} (scripted bots always keep their registry
+# loadout either way). True numbers with the fixed script (20 eps/bot x2):
+#   hunter-focus best: wanderer 100/90%, rusher 80/75%, hunter 90/80%
+#   Elo tournament: agent 1356.5 (wanderer 95%, rusher 80%, hunter 90%)
+# So rusher is the only bot at/below the bar. This stage therefore weights
+# rusher heaviest while keeping hunter and wanderer in the mix so neither
+# regresses: 50% rusher / 25% hunter / 25% wanderer.
+# Dodge shaping stays on (0.005) — it counters hunter's lead-prediction aim and
+# helps vs rusher's straight-line charges.
+# Eval tracks all three roster bots; best checkpoint kept by aggregate roster
+# win rate (WinRateEvalCallback), not shaped reward.
+# Launch (pre-seed the new run dir with the hunter-focus best first):
+#   H=ppo_hunter_focus_20260922-122357; S=<new stamp>
+#   mkdir -p runs/ppo_continue_$S/league
+#   cp runs/$H/best_roster.zip runs/ppo_continue_$S/model.zip
+#   cp runs/$H/best_roster_vecnormalize.pkl runs/ppo_continue_$S/vecnormalize.pkl
+#   ./scripts/train.sh --config configs/ppo_continue.yaml --timesteps 8000000 \
+#       --resume runs/ppo_continue_$S
+run_name: ppo_continue
+seed: 13
+
+env:
+  n_envs: 8
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+    dodge: 0.005
+    win: 10.0
+    loss: -10.0
+
+league:
+  # Uniform sampling over list entries -> 50% rusher / 25% hunter / 25% wanderer.
+  scripted: [rusher, rusher, hunter, wanderer]
+  p_scripted: 1.0
+  p_latest: 0.0
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 8000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [wanderer, rusher, hunter]
+  eval_episodes: 10
