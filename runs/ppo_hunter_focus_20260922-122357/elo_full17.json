@@ -1,0 +1,142 @@
+{
+  "model": "runs/ppo_hunter_focus_20260922-122357/best_roster.zip",
+  "bots": {
+    "wanderer": {
+      "win_rate": 0.95,
+      "loss_rate": 0.05,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 30.614159162249415,
+      "mean_ep_ticks": 427.65,
+      "elo": 1045.6
+    },
+    "rusher": {
+      "win_rate": 0.8,
+      "loss_rate": 0.2,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 23.713327841251157,
+      "mean_ep_ticks": 367.7,
+      "elo": 1164.1
+    },
+    "hunter": {
+      "win_rate": 0.9,
+      "loss_rate": 0.1,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 31.931527056382038,
+      "mean_ep_ticks": 548.7,
+      "elo": 1148.3
+    },
+    "orbiter": {
+      "win_rate": 0.95,
+      "loss_rate": 0.05,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 33.983319669798945,
+      "mean_ep_ticks": 446.35,
+      "elo": 1145.8
+    },
+    "sniper": {
+      "win_rate": 0.55,
+      "loss_rate": 0.45,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 15.25192290955456,
+      "mean_ep_ticks": 534.15,
+      "elo": 1289.2
+    },
+    "brawler": {
+      "win_rate": 0.45,
+      "loss_rate": 0.55,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 9.73696578469826,
+      "mean_ep_ticks": 465.8,
+      "elo": 1304.4
+    },
+    "ghost": {
+      "win_rate": 0.35,
+      "loss_rate": 0.65,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 12.913428077532444,
+      "mean_ep_ticks": 565.35,
+      "elo": 1297.1
+    },
+    "turret": {
+      "win_rate": 0.75,
+      "loss_rate": 0.25,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 19.224628784065136,
+      "mean_ep_ticks": 416.55,
+      "elo": 1123.0
+    },
+    "wanderer-hc1": {
+      "win_rate": 0.9,
+      "loss_rate": 0.1,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 27.07536006256705,
+      "mean_ep_ticks": 403.0,
+      "elo": 1085.3
+    },
+    "rusher-hc1": {
+      "win_rate": 1.0,
+      "loss_rate": 0.0,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 31.92586533186259,
+      "mean_ep_ticks": 388.25,
+      "elo": 1102.7
+    },
+    "hunter-hc1": {
+      "win_rate": 0.8,
+      "loss_rate": 0.2,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 21.483532598742748,
+      "mean_ep_ticks": 335.45,
+      "elo": 1220.8
+    },
+    "hunter-hc2": {
+      "win_rate": 0.3,
+      "loss_rate": 0.7,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 6.815902788413223,
+      "mean_ep_ticks": 528.4,
+      "elo": 1405.6
+    },
+    "orbiter-hc1": {
+      "win_rate": 0.8,
+      "loss_rate": 0.2,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 20.902704391477165,
+      "mean_ep_ticks": 1441.1,
+      "elo": 1154.3
+    },
+    "turret-hc1": {
+      "win_rate": 0.75,
+      "loss_rate": 0.25,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 21.31073488277616,
+      "mean_ep_ticks": 467.65,
+      "elo": 1154.7
+    },
+    "sniper-hc1": {
+      "win_rate": 0.9,
+      "loss_rate": 0.1,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 28.779962230625095,
+      "mean_ep_ticks": 714.35,
+      "elo": 1141.4
+    },
+    "brawler-hc1": {
+      "win_rate": 0.75,
+      "loss_rate": 0.25,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 18.461121183319484,
+      "mean_ep_ticks": 350.05,
+      "elo": 1230.5
+    },
+    "ghost-hc1": {
+      "win_rate": 0.45,
+      "loss_rate": 0.55,
+      "draw_rate": 0.0,
+      "mean_ep_reward": 14.236731111886911,
+      "mean_ep_ticks": 468.7,
+      "elo": 1274.6
+    }
+  },
+  "agent_elo": 1312.5
+}
