@@ -65,18 +65,41 @@ class SnapshotCallback(BaseCallback):
 
 
 class WinRateEvalCallback(BaseCallback):
-    """Periodic win-rate eval vs fixed scripted bots (deterministic policy)."""
+    """Periodic win-rate eval vs fixed scripted bots (deterministic policy).
 
-    def __init__(self, bots: list[str], episodes_per_bot: int,
+    Every eval is appended to ``run_dir/eval_history.jsonl``. The checkpoint
+    with the highest aggregate roster win rate is kept as
+    ``run_dir/best_roster.zip`` (+ ``best_roster_vecnormalize.pkl``), so the
+    best policy is selected by roster win rate, not shaped reward.
+    """
+
+    def __init__(self, run_dir: str, bots: list[str], episodes_per_bot: int,
                  eval_freq_rollouts: int, n_steps: int, n_envs: int,
                  arena: str, loadout: dict, verbose: int = 0):
         super().__init__(verbose)
+        self.run_dir = run_dir
+        self.history_path = os.path.join(run_dir, "eval_history.jsonl")
         self.bots = bots
         self.episodes_per_bot = episodes_per_bot
         self._every = eval_freq_rollouts * n_steps * n_envs
         self._next = self._every
         self.arena = arena
         self.loadout = loadout
+        # On resume, seed best-so-far from existing history so a resumed run
+        # never "improves" to something worse than the previous best.
+        self.best_agg = -1.0
+        if os.path.exists(self.history_path):
+            with open(self.history_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        agg = json.loads(line).get("aggregate_win_rate")
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if agg is not None and agg > self.best_agg:
+                        self.best_agg = agg
 
     def _on_step(self) -> bool:
         if self.num_timesteps < self._next:
@@ -84,6 +107,7 @@ class WinRateEvalCallback(BaseCallback):
         self._next += self._every
         train_env = self.training_env
         assert isinstance(train_env, VecNormalize)
+        results: dict[str, dict] = {}
         for bot in self.bots:
             wins = losses = draws = 0
             rewards = []
@@ -108,18 +132,41 @@ class WinRateEvalCallback(BaseCallback):
                         rewards.append(float(reward[0]))
                 venv.close()
             n = self.episodes_per_bot
+            results[bot] = {
+                "wins": wins, "losses": losses, "draws": draws,
+                "win_rate": wins / n,
+                "mean_reward": float(np.mean(rewards)) if rewards else 0.0,
+            }
             self.logger.record(f"eval/win_rate_{bot}", wins / n)
             self.logger.record(f"eval/loss_rate_{bot}", losses / n)
             self.logger.record(f"eval/draw_rate_{bot}", draws / n)
-            self.logger.record(f"eval/mean_reward_{bot}", float(np.mean(rewards)))
+            self.logger.record(f"eval/mean_reward_{bot}",
+                               results[bot]["mean_reward"])
             if self.verbose:
                 print(f"[eval] {bot}: W{wins} L{losses} D{draws} "
                       f"win_rate={wins / n:.2f}", flush=True)
+        agg = float(np.mean([results[b]["win_rate"] for b in self.bots]))
+        with open(self.history_path, "a") as f:
+            f.write(json.dumps({
+                "timesteps": self.num_timesteps,
+                "ts": time.time(),
+                "aggregate_win_rate": agg,
+                "bots": results,
+            }) + "\n")
+        self.logger.record("eval/aggregate_win_rate", agg)
+        if agg > self.best_agg:
+            self.best_agg = agg
+            self.model.save(os.path.join(self.run_dir, "best_roster.zip"))
+            train_env.save(os.path.join(self.run_dir,
+                                        "best_roster_vecnormalize.pkl"))
+            if self.verbose:
+                print(f"[eval] new best roster aggregate={agg:.3f} "
+                      f"-> best_roster.zip @ step {self.num_timesteps}",
+                      flush=True)
         self.logger.dump(self.num_timesteps)
         return True
 
 
-# ---------------------------------------------------------------------------
 # Env factory
 # ---------------------------------------------------------------------------
 def make_env_fn(rank: int, cfg: dict, run_dir: str):
@@ -228,19 +275,28 @@ def main() -> None:
         )
 
     rollout = n_steps * n_envs
+    # Unique checkpoint prefix per invocation. Resumed runs share run_dir
+    # with the run they continue, so a fixed "ppo" prefix interleaves (and
+    # ambiguates) checkpoints across stages.
+    ckpt_prefix = "ppo_" + datetime.now().strftime("%Y%m%d-%H%M%S")
     callbacks = [
         # NOTE: CheckpointCallback counts n_calls (rollout steps), not env
         # timesteps, so the multiplier is n_steps only (not n_steps*n_envs).
         CheckpointCallback(
             save_freq=cfg["training"].get("checkpoint_freq", 25) * n_steps,
             save_path=os.path.join(run_dir, "checkpoints"),
-            name_prefix="ppo"),
+            name_prefix=ckpt_prefix,
+            # Keep each checkpoint evaluable on its own: without this, a
+            # killed run leaves checkpoints whose normalization stats only
+            # ever existed in memory.
+            save_vecnormalize=True),
         SnapshotCallback(
             league_dir=os.path.join(run_dir, "league"),
             snapshot_freq_rollouts=cfg["training"].get("snapshot_freq", 10),
             n_steps=n_steps, n_envs=n_envs,
             max_snapshots=cfg["league"].get("max_snapshots", 8)),
         WinRateEvalCallback(
+            run_dir=run_dir,
             bots=cfg["training"].get("eval_bots", ["wanderer", "rusher", "hunter"]),
             episodes_per_bot=cfg["training"].get("eval_episodes", 10),
             eval_freq_rollouts=cfg["training"].get("eval_freq", 10),
