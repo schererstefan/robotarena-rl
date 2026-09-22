@@ -1,0 +1,38 @@
+{
+  "model": "/Users/stefan/dev/robotarena-rl/runs/ppo_scratch_20260922-111512/model.zip",
+  "vecnormalize": "/Users/stefan/dev/robotarena-rl/runs/ppo_scratch_20260922-111512/vecnormalize.pkl",
+  "bots": [
+    "wanderer",
+    "rusher",
+    "hunter"
+  ],
+  "episodes_per_bot": 20,
+  "arena": "open",
+  "deterministic": true,
+  "ts": 1790104034.583159,
+  "results": {
+    "wanderer": {
+      "wins": 20,
+      "losses": 0,
+      "draws": 0,
+      "win_rate": 1.0
+    },
+    "rusher": {
+      "wins": 0,
+      "losses": 20,
+      "draws": 0,
+      "win_rate": 0.0
+    },
+    "hunter": {
+      "wins": 0,
+      "losses": 20,
+      "draws": 0,
+      "win_rate": 0.0
+    }
+  },
+  "aggregate_win_rate": 0.3333333333333333,
+  "total": {
+    "wins": 20,
+    "episodes": 60
+  }
+}
