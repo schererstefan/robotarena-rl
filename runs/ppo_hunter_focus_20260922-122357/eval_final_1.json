@@ -1,0 +1,38 @@
+{
+  "model": "/Users/stefan/dev/robotarena-rl/runs/ppo_hunter_focus_20260922-122357/best_roster.zip",
+  "vecnormalize": "/Users/stefan/dev/robotarena-rl/runs/ppo_hunter_focus_20260922-122357/best_roster_vecnormalize.pkl",
+  "bots": [
+    "wanderer",
+    "rusher",
+    "hunter"
+  ],
+  "episodes_per_bot": 20,
+  "arena": "open",
+  "deterministic": true,
+  "ts": 1790106887.82341,
+  "results": {
+    "wanderer": {
+      "wins": 18,
+      "losses": 2,
+      "draws": 0,
+      "win_rate": 0.9
+    },
+    "rusher": {
+      "wins": 10,
+      "losses": 10,
+      "draws": 0,
+      "win_rate": 0.5
+    },
+    "hunter": {
+      "wins": 13,
+      "losses": 7,
+      "draws": 0,
+      "win_rate": 0.65
+    }
+  },
+  "aggregate_win_rate": 0.6833333333333332,
+  "total": {
+    "wins": 41,
+    "episodes": 60
+  }
+}
