@@ -153,9 +153,22 @@ for (( i=1; i<=MAX_RUNS; i++ )); do
   write_status "$i" "$BEST_SCORE" "$BEST_W" "$BEST_R" "$BEST_H" "$BEST_ELO" \
     "last iter score=$score (w=$w r=$r h=$h) elo=$elo"
 
-  champ=$(python3 -c "print(1 if $w>=0.8 and $r>=0.8 and $h>=0.8 else 0)")
+  # CHAMPION GATE (strict): EVERY opponent in BOTH independent 20-episode
+  # strict evals must exceed 0.80. Averages are NOT used here -- a weak
+  # reproduction must not hide behind a strong one. 0.80 exactly does not pass.
+  champ=$(.venv/bin/python3 - "$rundir" <<'PYEOF'
+import json, sys
+ok = True
+for i in ("1", "2"):
+    d = json.load(open(f"{sys.argv[1]}/eval_strict_{i}.json"))
+    for b in ("wanderer", "rusher", "hunter"):
+        if d["results"][b]["win_rate"] <= 0.8:
+            ok = False
+print(1 if ok else 0)
+PYEOF
+)
   if [[ "$champ" == "1" ]]; then
-    stop_reason="CHAMPION: strict w=$w r=$r h=$h all >= 0.80 at iteration $i"
+    stop_reason="CHAMPION: all of wanderer/rusher/hunter > 0.80 in BOTH strict runs at iteration $i"
     break
   fi
   if (( no_improve >= PATIENCE )); then
