@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+runs/
+bridge/dist/bridge.gen.ts
+*.mjs.map
+.DS_Store
+bridge/dist/

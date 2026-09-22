@@ -1,0 +1,38 @@
+# PPO 1v1 vs league (scripted bots + policy snapshots)
+run_name: ppo_1v1
+seed: 0
+
+env:
+  n_envs: 8
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  # reward_weights: {}   # overrides of rl/reward.py DEFAULT_WEIGHTS
+
+league:
+  scripted: [wanderer, rusher, hunter, orbiter, sniper, brawler]
+  p_scripted: 0.3     # P(opponent = scripted bot)
+  p_latest: 0.4       # P(opponent = latest snapshot | not scripted)
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048       # per env; rollout = n_steps * n_envs
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear  # linear decay to 0
+  gamma: 0.995
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 10000000
+  checkpoint_freq: 25   # rollouts between checkpoints
+  snapshot_freq: 10     # rollouts between league snapshot exports
+  eval_freq: 10         # rollouts between win-rate evals
+  eval_bots: [wanderer, rusher, hunter]
+  eval_episodes: 10
