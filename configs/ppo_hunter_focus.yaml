@@ -1,0 +1,67 @@
+# Hunter-focus stage: resume the scratch champion model, train 75% vs hunter /
+# 25% vs wanderer (wanderer retained so it doesn't regress). Hunter is at 0%
+# deterministic — fine-tuning alone is unlikely to be enough, so in addition
+# to the focused mix this stage ENABLES dodge shaping (dodge: 0.005).
+# Rationale (documented choice): the dodge reward in rl/env.py rewards moving
+# perpendicular to incoming bullets, which is the direct counter to hunter's
+# lead-prediction aim, but it was never switched on in the focused stages.
+# Alternatives considered and rejected for this round:
+#  - Behavioral cloning from a scripted kiting expert: writing a Python expert
+#    that actually beats hunter is itself the hard problem, and a memoryless
+#    MLP policy cannot fully imitate a memoryful expert's velocity-dependent
+#    actions (obs carries foe speed but not velocity direction).
+#  - Frame stacking: changes the input dim, breaks the warm start (needs
+#    first-layer surgery) and complicates the TS export; the bridge already
+#    computes first-order lead features, so the main velocity use-case
+#    (aiming) is covered. If dodge shaping + focused PPO fails, adding foe
+#    velocity (vx, vy) as explicit obs features is the documented next step.
+# Eval tracks all three roster bots; best checkpoint is kept by aggregate
+# roster win rate (WinRateEvalCallback), not shaped reward.
+# Launch:
+#   ./scripts/train.sh --config configs/ppo_hunter_focus.yaml --timesteps 8000000 \
+#     --resume runs/ppo_hunter_focus_<stamp>   # pre-seeded with scratch model.zip + vecnormalize.pkl
+run_name: ppo_hunter_focus
+seed: 12
+
+env:
+  n_envs: 8
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+    dodge: 0.005
+    win: 10.0
+    loss: -10.0
+
+league:
+  # Uniform sampling over list entries -> 75% hunter / 25% wanderer.
+  scripted: [hunter, hunter, hunter, wanderer]
+  p_scripted: 1.0
+  p_latest: 0.0
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 8000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [hunter, wanderer, rusher]
+  eval_episodes: 10

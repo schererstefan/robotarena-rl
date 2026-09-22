@@ -1,0 +1,55 @@
+# Rusher-focus stage: resume the scratch champion model, train 75% vs rusher /
+# 25% vs wanderer (wanderer retained so it doesn't regress). Dodge shaping is
+# ENABLED (dodge: 0.005) — the dodge reward existed in rl/env.py but was never
+# switched on in the focused stages; moving perpendicular to incoming bullets
+# is the direct counter to rusher/hunter lead-prediction aim.
+# Eval tracks all three roster bots; best checkpoint is kept by aggregate
+# roster win rate (WinRateEvalCallback), not shaped reward.
+# Launch:
+#   ./scripts/train.sh --config configs/ppo_rusher_focus.yaml --timesteps 8000000 \
+#     --resume runs/ppo_rusher_focus_<stamp>   # pre-seeded with scratch model.zip + vecnormalize.pkl
+run_name: ppo_rusher_focus
+seed: 11
+
+env:
+  n_envs: 8
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+    dodge: 0.005
+    win: 10.0
+    loss: -10.0
+
+league:
+  # Uniform sampling over list entries -> 75% rusher / 25% wanderer.
+  scripted: [rusher, rusher, rusher, wanderer]
+  p_scripted: 1.0
+  p_latest: 0.0
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 8000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [rusher, wanderer, hunter]
+  eval_episodes: 10
