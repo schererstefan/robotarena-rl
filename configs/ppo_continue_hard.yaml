@@ -1,0 +1,53 @@
+# Continue-hard stage: same as ppo_continue.yaml, but with ghost and hunter-hc2
+# added to the training mix once the campaign showed persistent weakness vs
+# them (Sep 22, 2026: ghost 35%, hunter-hc2 65% on the broad tournament).
+# The champion bar still only covers wanderer/rusher/hunter, so rusher keeps
+# the heaviest weight; hunter and wanderer stay in the mix so neither
+# regresses; ghost and hunter-hc2 get real exposure (1/6 episodes each).
+# Dodge shaping stays on (0.005).
+# Uniform sampling over list entries:
+#   rusher 33% / hunter 17% / wanderer 17% / ghost 17% / hunter-hc2 17%.
+run_name: ppo_continue_hard
+seed: 13
+
+env:
+  n_envs: 8
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+    dodge: 0.005
+    win: 10.0
+    loss: -10.0
+
+league:
+  scripted: [rusher, rusher, hunter, wanderer, ghost, hunter-hc2]
+  p_scripted: 1.0
+  p_latest: 0.0
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 8000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [wanderer, rusher, hunter]
+  eval_episodes: 10
