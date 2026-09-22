@@ -1,10 +1,10 @@
 """Reward shaping for RobotArena 1v1.
 
 Dense shaping on damage deltas + sparse bonuses for kills, pickups, turret
-captures, and the terminal outcome. Aim-assist shaping (`aim`, `fireAim`)
-bootstraps the hard exploration problem of aiming the sensor tower and
-landing hits; the win bonus keeps the agent optimizing for victory, not
-just aiming.
+captures, and the terminal outcome. Aim-assist shaping (`aim`, `fireLead`)
+uses the bridge-computed first-order LEAD error (not raw aim error), so the
+agent learns to lead moving targets instead of shooting where the foe was.
+The win bonus keeps the agent optimizing for victory, not just aiming.
 """
 from __future__ import annotations
 
@@ -18,15 +18,15 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "death": -3.0,       # dying
     "pickup": 0.3,       # collecting a powerup pad
     "turret": 1.0,       # capturing a map turret
-    "aim": 0.01,         # per tick, scaled by (1 - aimErr/pi) when foe visible
-    "fireAim": 0.05,     # per tick when firing with aimErr < 0.15 rad
+    "aim": 0.01,         # per tick, scaled by (1 - leadErr/pi) when foe visible
+    "fireLead": 0.05,    # per tick when firing with leadErr < 0.15 rad
     "tick": -0.002,      # per-tick urgency (avg match ~850 ticks -> ~-1.7)
     "win": 15.0,
     "loss": -15.0,
     "draw": 0.0,
 }
 
-_AIM_TOL = 0.15  # radians — "aimed" threshold for the fireAim bonus
+_AIM_TOL = 0.05  # radians — "aimed" threshold for the fireLead bonus (hunter-like 0.05 rad)
 
 
 def compute_reward(components: dict[str, Any], weights: dict[str, float],
@@ -37,6 +37,9 @@ def compute_reward(components: dict[str, Any], weights: dict[str, float],
     dealt = float(components.get("dealt", 0.0))
     taken = float(components.get("taken", 0.0))
     aim_err = float(components.get("aimErr", -1.0))
+    # Lead error (first-order target lead, computed bridge-side): the correct
+    # aim reference against moving foes. Falls back to aimErr if absent.
+    lead_err = float(components.get("leadErr", aim_err))
     reward = (
         w["dealt"] * dealt / 100.0
         + w["taken"] * taken / 100.0
@@ -46,10 +49,10 @@ def compute_reward(components: dict[str, Any], weights: dict[str, float],
         + w["turret"] * float(bool(components.get("turret", False)))
         + w["tick"]
     )
-    if aim_err >= 0:
-        reward += w["aim"] * (1.0 - aim_err / math.pi)
-        if firing and aim_err < _AIM_TOL:
-            reward += w["fireAim"]
+    if lead_err >= 0:
+        reward += w["aim"] * (1.0 - lead_err / math.pi)
+        if firing and lead_err < _AIM_TOL:
+            reward += w["fireLead"]
     outcome = "none"
     if terminated:
         if won:
@@ -65,6 +68,7 @@ def compute_reward(components: dict[str, Any], weights: dict[str, float],
         "reward/dealt": dealt,
         "reward/taken": taken,
         "reward/aimErr": aim_err,
+        "reward/leadErr": lead_err,
         "reward/outcome": outcome,
     }
     return float(reward), info

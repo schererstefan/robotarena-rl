@@ -21,6 +21,7 @@ import {
     MAX_TICKS_TOTAL,
     MAX_SPEED,
     GUN_COOLDOWN_TICKS,
+    BULLET_SPEED,
     DASH_COOLDOWN_TICKS,
     EMP_COOLDOWN_TICKS,
 } from '__ROBOTARENA_PATH__/src/sim/constants';
@@ -50,6 +51,42 @@ const normAngle = (a: number): number => {
 interface ObsCtx {
     maxHealth: number;
     myTeam: 0 | 1;
+}
+
+
+/**
+ * First-order lead solution for the nearest visible foe.
+ * Returns sin/cos of the SIGNED lead error (lead bearing minus tower angle)
+ * plus the unsigned error in radians. The agent cannot infer foe velocity
+ * from a single frame (obs carries speed but not velocity direction), so the
+ * bridge computes the lead directly; the policy just drives these features
+ * to sin=0, cos=1. err is -1 when no foe is visible.
+ */
+function leadError(sense: SenseState): { sin: number; cos: number; err: number } {
+    const s = sense.self;
+    const towerAngle = s.tower as number;
+    let best: { sin: number; cos: number; err: number } | null = null;
+    for (const f of sense.foes ?? []) {
+        if (typeof f.bearing !== "number" || !isFinite(f.bearing)) continue;
+        const vx = (f.speed ?? 0) * Math.cos(f.heading ?? 0);
+        const vy = (f.speed ?? 0) * Math.sin(f.heading ?? 0);
+        // Two fixed-point iterations on time-of-flight; plenty at 60Hz.
+        let tof = (f.distance ?? 0) / BULLET_SPEED;
+        for (let i = 0; i < 2; i += 1) {
+            const px = f.x + vx * tof;
+            const py = f.y + vy * tof;
+            tof = Math.hypot(px - s.x, py - s.y) / BULLET_SPEED;
+        }
+        const px = f.x + vx * tof;
+        const py = f.y + vy * tof;
+        const leadBearing = Math.atan2(py - s.y, px - s.x);
+        const signed = normAngle(leadBearing - towerAngle);
+        const err = Math.abs(signed);
+        if (best === null || err < best.err) {
+            best = { sin: Math.sin(signed), cos: Math.cos(signed), err };
+        }
+    }
+    return best ?? { sin: 0, cos: 1, err: -1 };
 }
 
 function buildObs(sense: SenseState, ctx: ObsCtx): number[] {
@@ -189,11 +226,12 @@ function buildObs(sense: SenseState, ctx: ObsCtx): number[] {
     // Damage/kill reward components come from exact snapshot diffs instead.
     const evts = sense.events ?? [];
     const kinds = new Set(evts.map((e) => e.kind));
+    const lead = leadError(sense);
     o.push(
         kinds.has('hit-by') || kinds.has('blast') ? 1 : 0,
-        0, // dealtDmg placeholder (reward-side)
+        lead.sin, // leadFeat sin(signed lead err), nearest foe (was reserved)
         kinds.has('kill') ? 1 : 0,
-        0, // died placeholder (reward-side)
+        lead.cos, // leadFeat cos(signed lead err), nearest foe (was reserved)
         kinds.has('pickup') ? 1 : 0,
         kinds.has('turret-captured') ? 1 : 0,
     );
@@ -424,6 +462,7 @@ interface Components {
     pickup: boolean;
     turret: boolean;
     aimErr: number;
+    leadErr: number;
 }
 
 function stepSession(s: Session, intent: Partial<Intent>): {
@@ -468,13 +507,14 @@ function stepSession(s: Session, intent: Partial<Intent>): {
         const e = Math.abs(normAngle(f.bearing - towerAngle));
         if (aimErr < 0 || e < aimErr) aimErr = e;
     }
+    const leadErr = leadError(sense).err; // min |lead bearing - tower|
 
     const r = s.match.result;
     const terminated = r.over && r.winner !== -1;
     const truncated = r.over && r.winner === -1;
     return {
         obs,
-        components: { dealt, taken, killed, died, pickup, turret, aimErr },
+        components: { dealt, taken, killed, died, pickup, turret, aimErr, leadErr },
         terminated, truncated,
         result: { winner: r.winner, tick: r.tick, over: r.over },
     };

@@ -1,0 +1,52 @@
+# Stage 2R: rusher ONLY. Focused training to learn kiting.
+# The 80/20 mix protects wanderer but doesn't give enough rusher exposure
+# to learn the kiting skill. Train rusher-only from the wanderer master;
+# the shooting skill transfers, the agent must ADD movement/kiting.
+# Will forget wanderer (expected); combine in stage 4.
+# Resume:
+#   ./scripts/train.sh --config configs/ppo_stage2r.yaml --timesteps 6000000 \
+#     --resume runs/ppo_scratch_20260922-111512
+run_name: ppo_stage2r
+seed: 4
+
+env:
+  n_envs: 12
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+
+    win: 10.0
+    loss: -10.0
+
+league:
+  scripted: [rusher]
+  p_scripted: 1.0
+  p_latest: 0.0
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 6000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [rusher]
+  eval_episodes: 10

@@ -229,8 +229,10 @@ def main() -> None:
 
     rollout = n_steps * n_envs
     callbacks = [
+        # NOTE: CheckpointCallback counts n_calls (rollout steps), not env
+        # timesteps, so the multiplier is n_steps only (not n_steps*n_envs).
         CheckpointCallback(
-            save_freq=cfg["training"].get("checkpoint_freq", 25) * rollout,
+            save_freq=cfg["training"].get("checkpoint_freq", 25) * n_steps,
             save_path=os.path.join(run_dir, "checkpoints"),
             name_prefix="ppo"),
         SnapshotCallback(

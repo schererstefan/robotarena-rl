@@ -1,0 +1,52 @@
+# Stage 2 curriculum: wanderer + rusher.
+# Stage 1 (wanderer only) reached 90% from scratch. Now add rusher while
+# KEEPING wanderer in the mix to prevent forgetting (negative transfer killed
+# the mixed run before). Rusher charges; the agent is faster (1.16 vs 1.08)
+# so kiting is the winning strategy. Lead features + fire discipline transfer.
+# Graduate to stage 3 (add hunter) when eval win_rate > 0.8 for BOTH.
+# Resume:
+#   ./scripts/train.sh --config configs/ppo_stage2.yaml --timesteps 6000000 \
+#     --resume runs/ppo_scratch
+run_name: ppo_stage2
+seed: 3
+
+env:
+  n_envs: 12
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+    win: 10.0
+    loss: -10.0
+
+league:
+  scripted: [wanderer, wanderer, wanderer, wanderer, rusher]
+  p_scripted: 1.0
+  p_latest: 0.0
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 6000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [wanderer, rusher]
+  eval_episodes: 10

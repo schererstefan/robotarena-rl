@@ -135,6 +135,37 @@ class RobotArenaEnv(gym.Env):
                                        terminated=terminated,
                                        won=(winner == 0), lost=(winner == 1),
                                        firing=firing)
+        # Dodge: reward moving perpendicular to incoming bullets.
+        # A bullet on collision course is dodged by sidestepping, not by
+        # outrunning it. Computed from raw obs (pre-VecNormalize).
+        import math as _math
+        dodge_w = self._weights.get("dodge", 0.0)
+        if dodge_w != 0.0:
+            speed = obs[5] * 375.0
+            if speed > 20.0:
+                heading = _math.atan2(obs[2], obs[3])
+                vx = speed * _math.cos(heading)
+                vy = speed * _math.sin(heading)
+                best = 0.0
+                for i in range(6):
+                    b = 38 + i * 6
+                    if obs[b] < 0.5:
+                        continue
+                    closing = obs[b + 4] * 430.0
+                    dist = obs[b + 3] * 540.0
+                    if closing < 50.0 or dist > 350.0 or dist < 1e-6:
+                        continue
+                    # bullet relative pos; perpendicular direction
+                    bx = obs[b + 1] * 960.0
+                    by = obs[b + 2] * 640.0
+                    px, py = -by / dist, bx / dist
+                    perp = abs(vx * px + vy * py) / 375.0
+                    if perp > best:
+                        best = perp
+                if best > 0:
+                    reward += dodge_w * best
+                    rinfo["reward/dodge"] = dodge_w * best
+
         info.update(rinfo)
         info["opponent"] = self._last_info.get("opponent")
         return obs, reward, terminated, truncated, info

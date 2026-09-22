@@ -1,0 +1,51 @@
+# Stage 3: hunter ONLY. The hardest matchup (identical stats, smart bot).
+# Hunter uses leadAngle + 0.05 aimTol + utility behaviors. To beat it, the agent
+# needs superior positioning, timing, and consistency. The shooting skill
+# transfers from stages 1/2; hunter requires out-playing, not just out-shooting.
+# Train hunter-only from the best stage 2 model. Will be slow.
+# Resume:
+#   ./scripts/train.sh --config configs/ppo_stage3.yaml --timesteps 10000000 \
+#     --resume <best_stage2_run>
+run_name: ppo_stage3
+seed: 5
+
+env:
+  n_envs: 12
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+    win: 10.0
+    loss: -10.0
+
+league:
+  scripted: [hunter]
+  p_scripted: 1.0
+  p_latest: 0.0
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 10000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [hunter]
+  eval_episodes: 10

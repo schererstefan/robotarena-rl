@@ -1,0 +1,54 @@
+# Stage 1 curriculum (v2): wanderer ONLY until >80% deterministic win rate.
+# REWARD REDESIGN (2026-09-22): the taken=-2.0 penalty created a cowardice trap --
+# fighting and losing (-32.6) was worse than running away for a draw (-22.8),
+# so the agent learned to avoid combat. New ordering: win > brave loss >
+# coward loss > coward draw. dealt raised to 2.0 (dealing damage is the primary
+# skill), win/loss reduced to +/-10 (still meaningful, not dominating), taken
+# back to -1.0. Lead targeting (obs dims 119/121 + leadErr shaping) is active.
+# Graduate to stage 2 (add rusher) when eval win_rate_wanderer > 0.8.
+# Resume:
+#   ./scripts/train.sh --config configs/ppo_stage1.yaml --timesteps 6000000 \
+#     --resume runs/ppo_shaped_20260922-101913
+run_name: ppo_scratch
+seed: 2
+
+env:
+  n_envs: 12
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+    win: 10.0
+    loss: -10.0
+
+league:
+  scripted: [wanderer]
+  p_scripted: 1.0
+  p_latest: 0.0
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 6000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [wanderer]
+  eval_episodes: 10

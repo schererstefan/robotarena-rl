@@ -15,7 +15,7 @@ Fixed layout, 124 float32 dims, built Node-side in `bridge.template.ts`
 | 82–89   | **turrets (2 × 4):** active flag, owned-by-me flag, owned-by-foe flag, progress −1..1 |
 | 90–113  | **pickup pads (4 × 6):** active flag, dx/960, dy/640, kind one-hot (amp/repair/overdrive) |
 | 114–117 | **match (4):** killsYou/5, killsTeam/5, aliveFoes/3, tick/11400 |
-| 118–123 | **last-tick events (6):** wasHit flag, *(reserved)*, gotKill flag, *(reserved)*, pickup flag, turret-captured flag |
+| 118–123 | **last-tick events (6):** wasHit flag, **leadFeat sin** (sin of signed lead-bearing−tower err, nearest foe), gotKill flag, **leadFeat cos** (cos of signed lead-bearing−tower err, nearest foe), pickup flag, turret-captured flag |
 
 Notes:
 
@@ -25,6 +25,7 @@ Notes:
   components are computed from exact snapshot diffs instead, so this lag only
   affects the two reserved/pickup/turret indicator dims.
 - `OBS_DIM` is asserted at runtime — the bridge throws if the builder drifts.
+- Dims 119/121 (leadFeat) carry the bridge-computed first-order target lead: the foe's velocity (heading+speed from SenseState) is extrapolated over the bullet time-of-flight, and the signed error between the lead bearing and the tower angle is exposed as sin/cos (0/1 when no foe is visible). The policy cannot infer foe velocity from a single frame (obs has foe speed but not direction), so the bridge computes the lead directly. Saved weights stay valid: these dims were constant 0 before 2026-09-22.
 - The exported policy (`rl/export_ts.py`) and the in-bridge policy opponent
   both consume exactly this layout; changing it invalidates saved weights.
 

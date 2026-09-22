@@ -1,0 +1,52 @@
+# Phase 2 "champion" run: curriculum + self-play league, victory-weighted rewards.
+# KEY FIX (2026-09-22): the agent could not hit movers -- foe velocity is not in
+# the obs, so it never learned target leading. The bridge now computes a
+# first-order lead and exposes sin/cos(signed lead err) in obs dims 119/121
+# (previously reserved) plus leadErr for shaping. aim/fireLead now key off the
+# LEAD error, teaching the agent to shoot where the foe will be.
+# Shaping is annealed 3x (aiming skill transfers) and win/loss is +/-25 --
+# victory must dominate the objective.
+# Resume (in place, keeps league snapshots + vecnormalize stats):
+#   ./scripts/train.sh --config configs/ppo_champion.yaml --timesteps 10000000 \
+#     --resume runs/ppo_shaped_20260922-101913
+run_name: ppo_champion
+seed: 2
+
+env:
+  n_envs: 12
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    aim: 0.003
+    fireLead: 0.015
+    win: 25.0
+    loss: -25.0
+
+league:
+  scripted: [wanderer, wanderer, rusher, hunter]
+  p_scripted: 0.6
+  p_latest: 0.3
+  max_snapshots: 8
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 10000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [wanderer, rusher, hunter]
+  eval_episodes: 10
