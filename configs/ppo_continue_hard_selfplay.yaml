@@ -1,0 +1,54 @@
+# Continue-hard stage, SELF-PLAY BLEND (from campaign iteration 6, Sep 22, 2026):
+# same scripted mix as ppo_continue_hard.yaml, but 30% of episodes draw
+# opponents from a validated league pool of this run's own policy snapshots.
+# A snapshot is admitted only after a deterministic 6-bot roster eval shows
+# a new run-best aggregate >= min_roster_rate (validated admission, no
+# weak/regressing checkpoints in the pool). Fights scripted-bot overfitting;
+# brawler and ghost (the binding gate constraints) are the expected
+# beneficiaries. p_latest biases self-play toward the strongest snapshot.
+# Sampling: 70% scripted / 30% self-play; of self-play, 50% latest.
+run_name: ppo_continue_hard_selfplay
+seed: 13
+
+env:
+  n_envs: 8
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+    dodge: 0.005
+    win: 10.0
+    loss: -10.0
+
+league:
+  scripted: [rusher, rusher, hunter, wanderer, ghost, hunter-hc2]
+  p_scripted: 0.7
+  p_latest: 0.5
+  max_snapshots: 8
+  min_roster_rate: 0.55
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  ortho_init: true
+
+training:
+  total_timesteps: 8000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [wanderer, rusher, hunter, ghost, hunter-hc2, brawler]
+  eval_episodes: 10

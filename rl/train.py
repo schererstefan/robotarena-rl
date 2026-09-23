@@ -30,21 +30,64 @@ from .league import League
 # Callbacks
 # ---------------------------------------------------------------------------
 class SnapshotCallback(BaseCallback):
-    """Periodically export policy weights JSON into the league pool."""
+    """Periodically export policy weights JSON into the league pool.
+
+    Validated admission (Stefan, Sep 2026): a snapshot joins the pool only
+    if the just-computed deterministic roster eval (see WinRateEvalCallback)
+    clears ``min_aggregate`` AND beats every snapshot admitted so far this
+    run. Weak or regressing checkpoints never become training opponents, so
+    self-play stays "strict" instead of diluting the curriculum.
+    """
 
     def __init__(self, league_dir: str, snapshot_freq_rollouts: int,
                  n_steps: int, n_envs: int, max_snapshots: int,
-                 activation: str = "tanh", verbose: int = 0):
+                 activation: str = "tanh", verbose: int = 0,
+                 eval_callback=None, min_aggregate: float = 0.0):
         super().__init__(verbose)
         self.league_dir = league_dir
         self._every = snapshot_freq_rollouts * n_steps * n_envs
         self._next = self._every
         self.max_snapshots = max_snapshots
         self.activation = activation
+        self.eval_callback = eval_callback
+        self.min_aggregate = float(min_aggregate)
+        # Ratchet: only new run-bests get admitted. On resume, seed from any
+        # existing eval history so a resumed run can't re-admit a weaker
+        # snapshot than one already in the pool.
+        self.best_admitted = -1.0
+        run_dir = os.path.dirname(os.path.abspath(league_dir))
+        hp = os.path.join(run_dir, "eval_history.jsonl")
+        if os.path.exists(hp):
+            try:
+                with open(hp) as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            agg = json.loads(line).get("aggregate_win_rate")
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        if agg is not None and agg > self.best_admitted:
+                            self.best_admitted = agg
+            except OSError:
+                pass
 
     def _on_step(self) -> bool:
         if self.num_timesteps >= self._next:
             self._next += self._every
+            agg = (self.eval_callback.last_aggregate
+                   if self.eval_callback is not None else None)
+            if agg is None:
+                if self.verbose:
+                    print("[snapshot] skipped: no roster eval yet", flush=True)
+                return True
+            if agg < self.min_aggregate or agg <= self.best_admitted + 1e-9:
+                if self.verbose:
+                    print(f"[snapshot] skipped: aggregate={agg:.3f} "
+                          f"(min={self.min_aggregate:.2f} "
+                          f"best_admitted={self.best_admitted:.3f})", flush=True)
+                return True
             path = os.path.join(self.league_dir,
                                 f"snapshot_{self.num_timesteps:09d}.json")
             # Include current VecNormalize stats so league opponents and
@@ -52,6 +95,7 @@ class SnapshotCallback(BaseCallback):
             norm = norm_from_vecnormalize(self.model.get_env())
             export_weights(self.model, path, activation=self.activation,
                            norm=norm)
+            self.best_admitted = agg
             # Prune to newest N.
             snaps = sorted(
                 (os.path.join(self.league_dir, f)
@@ -60,7 +104,8 @@ class SnapshotCallback(BaseCallback):
             for old in snaps[:-self.max_snapshots]:
                 os.remove(old)
             if self.verbose:
-                print(f"[snapshot] exported {path}", flush=True)
+                print(f"[snapshot] exported {path} "
+                      f"(roster aggregate={agg:.3f})", flush=True)
         return True
 
 
@@ -88,6 +133,9 @@ class WinRateEvalCallback(BaseCallback):
         # On resume, seed best-so-far from existing history so a resumed run
         # never "improves" to something worse than the previous best.
         self.best_agg = -1.0
+        # Latest deterministic roster aggregate; consumed by SnapshotCallback
+        # as the validated-admission gate.
+        self.last_aggregate = None
         if os.path.exists(self.history_path):
             with open(self.history_path) as f:
                 for line in f:
@@ -146,6 +194,7 @@ class WinRateEvalCallback(BaseCallback):
                 print(f"[eval] {bot}: W{wins} L{losses} D{draws} "
                       f"win_rate={wins / n:.2f}", flush=True)
         agg = float(np.mean([results[b]["win_rate"] for b in self.bots]))
+        self.last_aggregate = agg
         with open(self.history_path, "a") as f:
             f.write(json.dumps({
                 "timesteps": self.num_timesteps,
@@ -279,6 +328,25 @@ def main() -> None:
     # with the run they continue, so a fixed "ppo" prefix interleaves (and
     # ambiguates) checkpoints across stages.
     ckpt_prefix = "ppo_" + datetime.now().strftime("%Y%m%d-%H%M%S")
+    # Eval BEFORE snapshot: the snapshot admission gate consumes the
+    # just-computed deterministic roster aggregate, so only validated
+    # policies enter the league pool.
+    eval_cb = WinRateEvalCallback(
+        run_dir=run_dir,
+        bots=cfg["training"].get("eval_bots", ["wanderer", "rusher", "hunter"]),
+        episodes_per_bot=cfg["training"].get("eval_episodes", 10),
+        eval_freq_rollouts=cfg["training"].get("eval_freq", 10),
+        n_steps=n_steps, n_envs=n_envs,
+        arena=cfg["env"].get("arena", "open"),
+        loadout=cfg["env"].get("loadout", {}),
+        verbose=1)
+    snapshot_cb = SnapshotCallback(
+        league_dir=os.path.join(run_dir, "league"),
+        snapshot_freq_rollouts=cfg["training"].get("snapshot_freq", 10),
+        n_steps=n_steps, n_envs=n_envs,
+        max_snapshots=cfg["league"].get("max_snapshots", 8),
+        eval_callback=eval_cb,
+        min_aggregate=cfg["league"].get("min_roster_rate", 0.0))
     callbacks = [
         # NOTE: CheckpointCallback counts n_calls (rollout steps), not env
         # timesteps, so the multiplier is n_steps only (not n_steps*n_envs).
@@ -290,20 +358,8 @@ def main() -> None:
             # killed run leaves checkpoints whose normalization stats only
             # ever existed in memory.
             save_vecnormalize=True),
-        SnapshotCallback(
-            league_dir=os.path.join(run_dir, "league"),
-            snapshot_freq_rollouts=cfg["training"].get("snapshot_freq", 10),
-            n_steps=n_steps, n_envs=n_envs,
-            max_snapshots=cfg["league"].get("max_snapshots", 8)),
-        WinRateEvalCallback(
-            run_dir=run_dir,
-            bots=cfg["training"].get("eval_bots", ["wanderer", "rusher", "hunter"]),
-            episodes_per_bot=cfg["training"].get("eval_episodes", 10),
-            eval_freq_rollouts=cfg["training"].get("eval_freq", 10),
-            n_steps=n_steps, n_envs=n_envs,
-            arena=cfg["env"].get("arena", "open"),
-            loadout=cfg["env"].get("loadout", {}),
-            verbose=1),
+        eval_cb,
+        snapshot_cb,
     ]
 
     print(f"run_dir={run_dir} total_timesteps={total_timesteps} "

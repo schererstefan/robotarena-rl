@@ -8,8 +8,11 @@
 # Each iteration:
 #   1. seed a fresh run dir with the current global-best checkpoint
 #      (model.zip + vecnormalize.pkl)
-#   2. train 8M steps with configs/ppo_continue.yaml
-#      (50% rusher / 25% hunter / 25% wanderer + dodge shaping)
+#   2. train 8M steps with configs/ppo_continue.yaml (override via CONFIG env);
+#      from iteration 6 onward (Stefan, Sep 22, 2026) the campaign switches to
+#      configs/ppo_continue_hard_selfplay.yaml: 70% scripted / 30% VALIDATED
+#      league self-play (snapshots admitted only after a deterministic 6-bot
+#      roster eval shows a new run-best aggregate >= min_roster_rate).
 #   3. STRICT deterministic eval: scripts/eval_roster.py, 20 eps/bot, TWICE,
 #      on the run's best_roster.zip. This is the ONLY metric used for
 #      cross-run checkpoint selection -- in-training evals overstated rusher
@@ -117,8 +120,16 @@ for (( i=1; i<=MAX_RUNS; i++ )); do
   cp "$BEST/vecnormalize.pkl" "$rundir/vecnormalize.pkl"
   log "=== iteration $i/$MAX_RUNS: $rundir (seeded from best score=$BEST_SCORE) ==="
 
+  # Validated self-play blend from iteration 6 (Stefan, Sep 22, 2026):
+  # fights scripted-bot overfitting on the binding gate bots (brawler/ghost).
+  CONFIG_ROUND="$CONFIG"
+  if (( i >= 6 )) && [[ "$CONFIG" == "configs/ppo_continue_hard.yaml" ]]; then
+    CONFIG_ROUND="configs/ppo_continue_hard_selfplay.yaml"
+    log "iteration $i: switching to validated self-play blend ($CONFIG_ROUND)"
+  fi
+
   rc=0
-  ./scripts/train.sh --config "$CONFIG" --timesteps "$TIMESTEPS" --resume "$rundir" \
+  ./scripts/train.sh --config "$CONFIG_ROUND" --timesteps "$TIMESTEPS" --resume "$rundir" \
     >> "$CAMP/campaign.log" 2>&1 || rc=$?
   if (( rc != 0 )) || [[ ! -f "$rundir/best_roster.zip" ]]; then
     log "WARN: iteration $i training failed (rc=$rc); keeping previous best"
