@@ -1,12 +1,14 @@
-# Continue-hard stage: same as ppo_continue.yaml, but with ghost and hunter-hc2
-# added to the training mix once the campaign showed persistent weakness vs
-# them (Sep 22, 2026: ghost 35%, hunter-hc2 65% on the broad tournament).
-# The champion bar still only covers wanderer/rusher/hunter, so rusher keeps
-# the heaviest weight; hunter and wanderer stay in the mix so neither
-# regresses; ghost and hunter-hc2 get real exposure (1/6 episodes each).
+# Continue-hard stage, SELF-PLAY BLEND (mid-campaign switch at iteration 8,
+# Sep 22, 2026, per Stefan): the live campaign loop was launched before the
+# validated-self-play code existed and cannot pick up scripts/campaign.sh
+# edits mid-run, so this file -- the config the running loop actually reads
+# each iteration -- carries the blend directly.
+# 70% scripted (rusher 2x, hunter, wanderer, ghost, hunter-hc2) /
+# 30% validated league self-play. A snapshot is admitted to the league pool
+# only after a deterministic 6-bot roster eval shows a new run-best
+# aggregate >= min_roster_rate (see SnapshotCallback in rl/train.py).
+# p_latest biases self-play toward the strongest admitted snapshot.
 # Dodge shaping stays on (0.005).
-# Uniform sampling over list entries:
-#   rusher 33% / hunter 17% / wanderer 17% / ghost 17% / hunter-hc2 17%.
 run_name: ppo_continue_hard
 seed: 13
 
@@ -25,9 +27,10 @@ env:
 
 league:
   scripted: [rusher, rusher, hunter, wanderer, ghost, hunter-hc2]
-  p_scripted: 1.0
-  p_latest: 0.0
+  p_scripted: 0.7
+  p_latest: 0.5
   max_snapshots: 8
+  min_roster_rate: 0.55
 
 ppo:
   n_steps: 2048
