@@ -403,7 +403,42 @@ def main() -> None:
         "const MAX_SPEED = 150;\nconst GUN_COOLDOWN_TICKS = 24;\n"
         "const DASH_COOLDOWN_TICKS = 480;\nconst EMP_COOLDOWN_TICKS = 720;\n"
     )
-    builder = header + builder
+    # The obs builder calls leadError(), which is defined in the bridge
+    # template and needs BULLET_SPEED from the game constants. Extract both
+    # so the generated robot file is self-contained (previously the output
+    # referenced leadError/BULLET_SPEED without defining them).
+    lead_sig = "function leadError(sense: SenseState)"
+    ls = src.index(lead_sig)
+    ldepth = 0
+    lend = None
+    for i in range(ls, len(src)):
+        if src[i] == "{":
+            ldepth += 1
+        elif src[i] == "}":
+            ldepth -= 1
+            if ldepth == 0:
+                lend = i + 1
+                break
+    assert lend is not None, "could not extract leadError from bridge template"
+    lead_fn = src[ls:lend]
+    import re
+    bullet_speed = None
+    ra_path = os.environ.get("ROBOTARENA_PATH", "/Users/stefan/dev/robotarena")
+    const_path = os.path.join(ra_path, "src", "sim", "constants.ts")
+    try:
+        with open(const_path) as f:
+            m = re.search(r"BULLET_SPEED\s*=\s*([0-9.]+)", f.read())
+        if m:
+            bullet_speed = m.group(1)
+    except OSError:
+        pass
+    if bullet_speed is None:
+        bullet_speed = "430"
+        print("WARNING: could not read BULLET_SPEED from game constants; "
+              "defaulting to 430")
+    else:
+        print(f"inlined BULLET_SPEED={bullet_speed} from {const_path}")
+    builder = header + f"const BULLET_SPEED = {bullet_speed};\n" + lead_fn + "\n\n" + builder
 
     norm = weights.get("norm") or {"mean": [0.0] * OBS_DIM,
                                        "var": [1.0] * OBS_DIM,
