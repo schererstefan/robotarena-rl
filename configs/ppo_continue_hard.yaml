@@ -49,5 +49,5 @@ training:
   checkpoint_freq: 25
   snapshot_freq: 10
   eval_freq: 10
-  eval_bots: [wanderer, rusher, hunter]
+  eval_bots: [wanderer, rusher, hunter, ghost, hunter-hc2, brawler]
   eval_episodes: 10
