@@ -407,11 +407,14 @@ def main() -> None:
     # template and needs BULLET_SPEED from the game constants. Extract both
     # so the generated robot file is self-contained (previously the output
     # referenced leadError/BULLET_SPEED without defining them).
-    lead_sig = "function leadError(sense: SenseState)"
+    # NOTE: match the full signature (incl. the braced return type) so brace
+    # counting starts at the function *body*, not the return type annotation.
+    lead_sig = ("function leadError(sense: SenseState): "
+                "{ sin: number; cos: number; err: number } {")
     ls = src.index(lead_sig)
-    ldepth = 0
+    ldepth = 1
     lend = None
-    for i in range(ls, len(src)):
+    for i in range(ls + len(lead_sig), len(src)):
         if src[i] == "{":
             ldepth += 1
         elif src[i] == "}":
