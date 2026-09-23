@@ -26,7 +26,7 @@ env:
     loss: -10.0
 
 league:
-  scripted: [rusher, rusher, hunter, wanderer, ghost, hunter-hc2]
+  scripted: [rusher, rusher, hunter, wanderer, ghost, ghost, hunter-hc2, brawler, brawler]
   p_scripted: 0.7
   p_latest: 0.5
   max_snapshots: 8
