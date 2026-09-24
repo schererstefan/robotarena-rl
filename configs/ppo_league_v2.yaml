@@ -2,7 +2,7 @@
 # KL anchor to the iteration seed + live rollback gate.
 #
 # What changed vs ppo_continue_hard_selfplay.yaml:
-#  - p_scripted 0.70 -> 0.25 PERMANENT floor: the scripted anchor was
+#  - p_scripted 0.70 PERMANENT floor: the scripted anchor was
 #    load-bearing (pure self-play collapsed 0.82 -> 0.37 aggregate). It
 #    never decays to 0 in this config.
 #  - p_latest is now a fraction OF THE SELF-PLAY SHARE (rl/league.py was
@@ -38,7 +38,7 @@ env:
 
 league:
   scripted: [rusher, rusher, hunter, wanderer, ghost, ghost, hunter-hc2, brawler, brawler]
-  p_scripted: 0.25
+  p_scripted: 0.70
   p_latest: 0.5
   max_snapshots: 8
   min_roster_rate: 0.55
