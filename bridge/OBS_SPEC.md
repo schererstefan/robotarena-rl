@@ -1,6 +1,6 @@
 # Observation spec — bridge output vector
 
-Fixed layout, 124 float32 dims, built Node-side in `bridge.template.ts`
+Fixed layout, 128 float32 dims, built Node-side in `bridge.template.ts`
 (`buildObs`). All values are clamped; absent entities are zero-padded with
 `present = 0`. Source of truth is the code; this doc mirrors it.
 
@@ -12,13 +12,21 @@ Fixed layout, 124 float32 dims, built Node-side in `bridge.template.ts`
 | 38–73   | **bullets (6 nearest × 6):** present, dx/960, dy/640, dist/540, closing/430, damage/25 |
 | 74–77   | **walls (4):** left/960, right/960, top/640, bottom/640 |
 | 78–81   | **zone (4):** distToSafety/960, inside flag, suddenDeathIn/11400, shrinking flag |
-| 82–89   | **turrets (2 × 4):** active flag, owned-by-me flag, owned-by-foe flag, progress −1..1 |
-| 90–113  | **pickup pads (4 × 6):** active flag, dx/960, dy/640, kind one-hot (amp/repair/overdrive) |
-| 114–117 | **match (4):** killsYou/5, killsTeam/5, aliveFoes/3, tick/11400 |
-| 118–123 | **last-tick events (6):** wasHit flag, **leadFeat sin** (sin of signed lead-bearing−tower err, nearest foe), gotKill flag, **leadFeat cos** (cos of signed lead-bearing−tower err, nearest foe), pickup flag, turret-captured flag |
+| 82–93   | **turrets (2 × 6):** active flag, dx/960, dy/640, owned-by-me flag, owned-by-foe flag, progress −1..1 |
+| 94–117  | **pickup pads (4 × 6):** active flag, dx/960, dy/640, kind one-hot (amp/repair/overdrive) |
+| 118–121 | **match (4):** killsYou/5, killsTeam/5, aliveFoes/3, tick/11400 |
+| 122–127 | **last-tick events (6):** wasHit flag, **leadFeat sin** (sin of signed lead-bearing−tower err, nearest foe), gotKill flag, **leadFeat cos** (cos of signed lead-bearing−tower err, nearest foe), pickup flag, turret-captured flag |
 
 Notes:
 
+- **Cone perception (2026-09-24):** pads and turrets are perceived through the
+  tower's sensor cone only (sensor range + tower FOV, same rule as foes and
+  bullets) — the engine filters them in `sense()`, so there is no global map
+  knowledge. Pad/turret slots are nearest-first among the sensed ones and
+  zero-padded when fewer are visible. Turret dx/dy were added the same day
+  (previously turrets had no position); OBS_DIM went 124 → 128, invalidating
+  older weights. Walls remain arena-bound distances (no interior walls exist
+  on the `open` training arena; bounds are derivable from self x/y anyway).
 - `bearing − heading` is wrapped to [−π, π] before sin/cos (rotation-invariant).
 - Event flags lag one physics tick: `SenseState.events` describes the step
   completed before the current tick's `update()` ran. Damage/kill reward

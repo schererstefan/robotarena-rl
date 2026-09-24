@@ -16,7 +16,7 @@ from .reward import DEFAULT_WEIGHTS, compute_reward
 import shutil
 
 ACTION_DIMS = [5, 5, 5, 2, 2, 2, 2]
-OBS_DIM = 124
+OBS_DIM = 128
 NODE_BIN = (shutil.which("node") or "/opt/homebrew/bin/node"
             or "/usr/local/bin/node")
 _BRIDGE_REL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

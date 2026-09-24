@@ -34,9 +34,9 @@ import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 
 // ---------------------------------------------------------------------------
-// Observation spec — 124 dims. Full layout documented in OBS_SPEC.md.
+// Observation spec — 128 dims. Full layout documented in OBS_SPEC.md.
 // ---------------------------------------------------------------------------
-export const OBS_DIM = 124;
+export const OBS_DIM = 128;
 export const ACTION_DIMS = [5, 5, 5, 2, 2, 2, 2];
 
 const clamp = (v: number, lo: number, hi: number): number =>
@@ -183,13 +183,17 @@ function buildObs(sense: SenseState, ctx: ObsCtx): number[] {
         z?.phase === 'shrinking' ? 1 : 0,
     );
 
-    // -- turrets x4 (8) --
+    // -- turrets x6 (12) --
+    // NOTE: sense.turrets is already cone-gated engine-side: only turrets
+    // inside this robot's tower sensor cone are present, nearest first.
     const turrets = sense.turrets ?? [];
     for (let i = 0; i < 2; i += 1) {
         const t = turrets[i];
-        if (!t) { o.push(0, 0, 0, 0); continue; }
+        if (!t) { o.push(0, 0, 0, 0, 0, 0); continue; }
         o.push(
             t.state === 'active' ? 1 : 0,
+            clamp((t.x - hx) / ARENA_WIDTH, -1, 1),
+            clamp((t.y - hy) / ARENA_HEIGHT, -1, 1),
             t.owner === ctx.myTeam ? 1 : 0,
             t.owner !== -1 && t.owner !== ctx.myTeam ? 1 : 0,
             clamp(t.progress ?? 0, -1, 1),
@@ -197,6 +201,8 @@ function buildObs(sense: SenseState, ctx: ObsCtx): number[] {
     }
 
     // -- pads x6 (24) --
+    // NOTE: sense.pickups is already cone-gated engine-side: only pads
+    // inside this robot's tower sensor cone are present, nearest first.
     const pads = sense.pickups ?? [];
     for (let i = 0; i < 4; i += 1) {
         const p = pads[i];

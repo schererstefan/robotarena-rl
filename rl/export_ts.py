@@ -4,7 +4,7 @@ The weights JSON feeds two consumers:
   1. the Node bridge policy opponent (league self-play), and
   2. `robot_<name>.ts` — a drop-in RobotArena robot file (see below).
 
-Layout: {"obs_dim": 124, "action_dims": [5,5,5,2,2,2,2],
+Layout: {"obs_dim": 128, "action_dims": [5,5,5,2,2,2,2],
           "activation": "tanh",
           "norm": {"mean": [...], "var": [...], "epsilon": 1e-8,
                    "clip_obs": 10.0},   # VecNormalize stats (optional)
