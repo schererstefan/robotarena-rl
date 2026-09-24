@@ -42,7 +42,7 @@ FULL_ROSTER="wanderer rusher hunter orbiter sniper brawler ghost turret wanderer
 # ghost, hunter-hc2, brawler join the original wanderer/rusher/hunter bar).
 GATE_BOTS="wanderer rusher hunter ghost hunter-hc2 brawler"
 
-CAMP="runs/campaign"
+CAMP="${CAMP_DIR:-runs/campaign}"
 BEST="$CAMP/best"
 mkdir -p "$BEST"
 

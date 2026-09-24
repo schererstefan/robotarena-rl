@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import time
 from datetime import datetime
 
@@ -21,6 +22,7 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
+from .anchor import AnchorKLPPO
 from .env import ACTION_DIMS, OBS_DIM, RobotArenaEnv
 from .export_ts import export_weights, norm_from_vecnormalize
 from .league import League
@@ -113,9 +115,12 @@ class WinRateEvalCallback(BaseCallback):
     """Periodic win-rate eval vs fixed scripted bots (deterministic policy).
 
     Every eval is appended to ``run_dir/eval_history.jsonl``. The checkpoint
-    with the highest aggregate roster win rate is kept as
-    ``run_dir/best_roster.zip`` (+ ``best_roster_vecnormalize.pkl``), so the
-    best policy is selected by roster win rate, not shaped reward.
+    with the highest MIN-OF-SIX roster win rate is kept as
+    ``run_dir/best_roster.zip`` (+ ``best_roster_vecnormalize.pkl``): the
+    campaign scores iterations by min-of-six, so run-level selection matches
+    the campaign metric (aggregate is still recorded, and still drives the
+    snapshot admission gate). After each eval the per-bot win rates are also
+    written to ``run_dir/league/pfsp.json`` for PFSP opponent weighting.
     """
 
     def __init__(self, run_dir: str, bots: list[str], episodes_per_bot: int,
@@ -124,6 +129,7 @@ class WinRateEvalCallback(BaseCallback):
         super().__init__(verbose)
         self.run_dir = run_dir
         self.history_path = os.path.join(run_dir, "eval_history.jsonl")
+        self.pfsp_path = os.path.join(run_dir, "league", "pfsp.json")
         self.bots = bots
         self.episodes_per_bot = episodes_per_bot
         self._every = eval_freq_rollouts * n_steps * n_envs
@@ -132,10 +138,12 @@ class WinRateEvalCallback(BaseCallback):
         self.loadout = loadout
         # On resume, seed best-so-far from existing history so a resumed run
         # never "improves" to something worse than the previous best.
-        self.best_agg = -1.0
-        # Latest deterministic roster aggregate; consumed by SnapshotCallback
-        # as the validated-admission gate.
+        self.best_min6 = -1.0
+        # Latest deterministic roster stats; consumed by SnapshotCallback
+        # (aggregate, as the validated-admission gate) and RollbackCallback
+        # (min-of-six, as the non-regression gate).
         self.last_aggregate = None
+        self.last_min6 = None
         if os.path.exists(self.history_path):
             with open(self.history_path) as f:
                 for line in f:
@@ -143,11 +151,11 @@ class WinRateEvalCallback(BaseCallback):
                     if not line:
                         continue
                     try:
-                        agg = json.loads(line).get("aggregate_win_rate")
+                        m6 = json.loads(line).get("min6_win_rate")
                     except (json.JSONDecodeError, ValueError):
                         continue
-                    if agg is not None and agg > self.best_agg:
-                        self.best_agg = agg
+                    if m6 is not None and m6 > self.best_min6:
+                        self.best_min6 = m6
 
     def _on_step(self) -> bool:
         if self.num_timesteps < self._next:
@@ -194,25 +202,86 @@ class WinRateEvalCallback(BaseCallback):
                 print(f"[eval] {bot}: W{wins} L{losses} D{draws} "
                       f"win_rate={wins / n:.2f}", flush=True)
         agg = float(np.mean([results[b]["win_rate"] for b in self.bots]))
+        min6 = float(min(results[b]["win_rate"] for b in self.bots))
         self.last_aggregate = agg
+        self.last_min6 = min6
         with open(self.history_path, "a") as f:
             f.write(json.dumps({
                 "timesteps": self.num_timesteps,
                 "ts": time.time(),
                 "aggregate_win_rate": agg,
+                "min6_win_rate": min6,
                 "bots": results,
             }) + "\n")
+        # PFSP weights for the league: atomic write so env workers never
+        # read a half-written file.
+        tmp = self.pfsp_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({
+                "timesteps": self.num_timesteps,
+                "ts": time.time(),
+                "win_rate": {b: results[b]["win_rate"] for b in self.bots},
+            }, f)
+        os.replace(tmp, self.pfsp_path)
         self.logger.record("eval/aggregate_win_rate", agg)
-        if agg > self.best_agg:
-            self.best_agg = agg
+        self.logger.record("eval/min6_win_rate", min6)
+        if min6 > self.best_min6 + 1e-9:
+            self.best_min6 = min6
             self.model.save(os.path.join(self.run_dir, "best_roster.zip"))
             train_env.save(os.path.join(self.run_dir,
                                         "best_roster_vecnormalize.pkl"))
             if self.verbose:
-                print(f"[eval] new best roster aggregate={agg:.3f} "
+                print(f"[eval] new best roster min6={min6:.3f} "
+                      f"(aggregate={agg:.3f}) "
                       f"-> best_roster.zip @ step {self.num_timesteps}",
                       flush=True)
         self.logger.dump(self.num_timesteps)
+        return True
+
+
+class RollbackCallback(BaseCallback):
+    """Live non-regression gate (Experiment 1, Sep 2026).
+
+    If min-of-six drops more than ``max_drop`` below this run's reference
+    (its first roster eval, ~the seed policy) for ``patience`` consecutive
+    evals, stop training. The campaign reseeds every iteration from the
+    global best, so a stopped run simply keeps its best checkpoint --
+    the rollback is structural, not a file restore.
+    """
+
+    def __init__(self, eval_callback: WinRateEvalCallback,
+                 max_drop: float = 0.05, patience: int = 2, verbose: int = 0):
+        super().__init__(verbose)
+        self.eval_callback = eval_callback
+        self.max_drop = float(max_drop)
+        self.patience = int(patience)
+        self.reference: float | None = None
+        self.bad = 0
+
+    def _on_step(self) -> bool:
+        m = self.eval_callback.last_min6
+        if m is None:
+            return True
+        if self.reference is None:
+            self.reference = m
+            if self.verbose:
+                print(f"[rollback] reference min6={m:.3f} "
+                      f"@ step {self.num_timesteps}", flush=True)
+            return True
+        if self.reference - m > self.max_drop + 1e-9:
+            self.bad += 1
+            if self.verbose:
+                print(f"[rollback] min6={m:.3f} is "
+                      f"{self.reference - m:.1%} below ref={self.reference:.3f} "
+                      f"({self.bad}/{self.patience})", flush=True)
+            if self.bad >= self.patience:
+                print(f"[rollback] STOPPING run @ step {self.num_timesteps}: "
+                      f"min6={m:.3f} > {self.max_drop:.0%} below "
+                      f"ref={self.reference:.3f} for {self.bad} straight "
+                      f"evals -- keeping best checkpoint", flush=True)
+                return False
+        else:
+            self.bad = 0
         return True
 
 
@@ -227,6 +296,8 @@ def make_env_fn(rank: int, cfg: dict, run_dir: str):
             p_scripted=cfg["league"].get("p_scripted", 0.3),
             p_latest=cfg["league"].get("p_latest", 0.4),
             max_snapshots=cfg["league"].get("max_snapshots", 8),
+            pfsp_exponent=cfg["league"].get("pfsp_exponent", 1.5),
+            uniform_mix=cfg["league"].get("uniform_mix", 0.2),
         )
         env = RobotArenaEnv(
             opponent_sampler=league.sample,
@@ -276,6 +347,31 @@ def main() -> None:
         with open(os.path.join(run_dir, "config.yaml"), "w") as f:
             yaml.safe_dump(cfg, f)
 
+    # KL anchor (Experiment 1, Sep 2026): on resume, freeze the iteration
+    # seed (the global best) as the frozen reference policy + its obs stats.
+    anchor_cfg = cfg.get("anchor", {}) or {}
+    use_anchor = bool(anchor_cfg.get("enabled", False))
+    anchor_kwargs: dict = {}
+    if use_anchor:
+        anchor_model_path = os.path.join(run_dir, "anchor_model.zip")
+        anchor_vn_path = os.path.join(run_dir, "anchor_vecnormalize.pkl")
+        if args.resume and not os.path.exists(anchor_model_path):
+            shutil.copy(os.path.join(run_dir, "model.zip"), anchor_model_path)
+            shutil.copy(os.path.join(run_dir, "vecnormalize.pkl"),
+                        anchor_vn_path)
+            print(f"anchor: froze iteration seed -> {anchor_model_path}",
+                  flush=True)
+        anchor_kwargs = dict(
+            anchor_model_path=(anchor_model_path
+                               if os.path.exists(anchor_model_path) else None),
+            anchor_vecnormalize_path=(anchor_vn_path
+                                      if os.path.exists(anchor_vn_path)
+                                      else None),
+            kl_anchor_coef=anchor_cfg.get("kl_coef", 0.05),
+            kl_anchor_anneal=anchor_cfg.get("anneal", True),
+        )
+    ModelCls = AnchorKLPPO if use_anchor else PPO
+
     vec_env_cls = SubprocVecEnv if n_envs > 1 else DummyVecEnv
     # Per-worker league needs distinct factories; make_vec_env with a single
     # factory replicates it, which is fine (each worker builds its own League).
@@ -299,13 +395,15 @@ def main() -> None:
         else:
             venv = VecNormalize(base_venv, norm_obs=True, norm_reward=True,
                                 clip_reward=10.0)
-        model = PPO.load(os.path.join(run_dir, "model.zip"), env=venv,
-                         custom_objects={"learning_rate": linear_schedule(lr)
-                                         if lr_schedule == "linear" else lr})
+        model = ModelCls.load(os.path.join(run_dir, "model.zip"), env=venv,
+                              custom_objects={
+                                  "learning_rate": linear_schedule(lr)
+                                  if lr_schedule == "linear" else lr},
+                              **anchor_kwargs)
     else:
         venv = VecNormalize(base_venv, norm_obs=True, norm_reward=True,
                             clip_reward=10.0)
-        model = PPO(
+        model = ModelCls(
             "MlpPolicy", venv,
             n_steps=n_steps,
             batch_size=ppo_cfg.get("batch_size", 1024),
@@ -321,6 +419,7 @@ def main() -> None:
             verbose=1,
             tensorboard_log=os.path.join(run_dir, "tb"),
             seed=cfg.get("seed", 0),
+            **anchor_kwargs,
         )
 
     rollout = n_steps * n_envs
@@ -340,13 +439,6 @@ def main() -> None:
         arena=cfg["env"].get("arena", "open"),
         loadout=cfg["env"].get("loadout", {}),
         verbose=1)
-    snapshot_cb = SnapshotCallback(
-        league_dir=os.path.join(run_dir, "league"),
-        snapshot_freq_rollouts=cfg["training"].get("snapshot_freq", 10),
-        n_steps=n_steps, n_envs=n_envs,
-        max_snapshots=cfg["league"].get("max_snapshots", 8),
-        eval_callback=eval_cb,
-        min_aggregate=cfg["league"].get("min_roster_rate", 0.0))
     callbacks = [
         # NOTE: CheckpointCallback counts n_calls (rollout steps), not env
         # timesteps, so the multiplier is n_steps only (not n_steps*n_envs).
@@ -359,8 +451,25 @@ def main() -> None:
             # ever existed in memory.
             save_vecnormalize=True),
         eval_cb,
-        snapshot_cb,
     ]
+    # Live non-regression gate: halt the run if min-of-six collapses vs the
+    # iteration seed. Must run AFTER eval_cb each step (it consumes
+    # eval_cb.last_min6).
+    rb_cfg = cfg.get("rollback", {}) or {}
+    if rb_cfg.get("enabled", False):
+        callbacks.append(RollbackCallback(
+            eval_callback=eval_cb,
+            max_drop=rb_cfg.get("max_drop", 0.05),
+            patience=rb_cfg.get("patience", 2),
+            verbose=1))
+    snapshot_cb = SnapshotCallback(
+        league_dir=os.path.join(run_dir, "league"),
+        snapshot_freq_rollouts=cfg["training"].get("snapshot_freq", 10),
+        n_steps=n_steps, n_envs=n_envs,
+        max_snapshots=cfg["league"].get("max_snapshots", 8),
+        eval_callback=eval_cb,
+        min_aggregate=cfg["league"].get("min_roster_rate", 0.0))
+    callbacks.append(snapshot_cb)
 
     print(f"run_dir={run_dir} total_timesteps={total_timesteps} "
           f"obs_dim={OBS_DIM} action_dims={ACTION_DIMS}", flush=True)
