@@ -22,7 +22,11 @@
 #      two evals; new global best iff score strictly improves.
 #
 # Stop when: champion bar met, or MAX_RUNS iterations, or PATIENCE straight
-# iterations with no improvement. Progress: runs/campaign/STATUS.md,
+# iterations with no improvement. While the best min-of-six strict win rate
+# is 0, "improvement" is measured on the aggregate (mean) strict win rate so
+# a flat-zero min6 doesn't burn the patience budget on a technicality; once
+# min6 > 0 the counter switches back to strict min6 (Stefan, Sep 26, 2026).
+# Progress: runs/campaign/STATUS.md,
 # runs/campaign/campaign.log, per-iteration rows in runs/campaign/results.jsonl.
 # Global best checkpoint: runs/campaign/best/{model.zip,vecnormalize.pkl}.
 #
@@ -114,8 +118,9 @@ if [[ -n "$SEED_RATES" ]]; then
   read -r BEST_W BEST_R BEST_H BEST_G BEST_HHC BEST_BR <<< "$SEED_RATES"
   BEST_ELO="$SEED_ELO"
   BEST_SCORE=$(python3 -c "print(min($BEST_W,$BEST_R,$BEST_H,$BEST_G,$BEST_HHC,$BEST_BR))")
+  BEST_AGG=$(python3 -c "print(($BEST_W+$BEST_R+$BEST_H+$BEST_G+$BEST_HHC+$BEST_BR)/6)")
 else
-  BEST_W="?"; BEST_R="?"; BEST_H="?"; BEST_G="?"; BEST_HHC="?"; BEST_BR="?"; BEST_ELO="$SEED_ELO"; BEST_SCORE=0
+  BEST_W="?"; BEST_R="?"; BEST_H="?"; BEST_G="?"; BEST_HHC="?"; BEST_BR="?"; BEST_ELO="$SEED_ELO"; BEST_SCORE=0; BEST_AGG=0
 fi
 write_status 0 "$BEST_SCORE" "$BEST_W" "$BEST_R" "$BEST_H" "$BEST_G" "$BEST_HHC" "$BEST_BR" "$BEST_ELO" "seeded; training not started"
 log "seed: score=$BEST_SCORE (w=$BEST_W r=$BEST_R h=$BEST_H g=$BEST_G hhc=$BEST_HHC br=$BEST_BR) elo=$BEST_ELO"
@@ -161,7 +166,14 @@ for (( i=1; i<=MAX_RUNS; i++ )); do
   fi
   read -r w r h g hhc br <<< "$RATES"
   score=$(python3 -c "print(min($w,$r,$h,$g,$hhc,$br))")
-  improved=$(python3 -c "print(1 if $score > $BEST_SCORE + 1e-9 else 0)")
+  agg=$(python3 -c "print(($w+$r+$h+$g+$hhc+$br)/6)")
+  # Patience regime (Stefan, Sep 26, 2026): while best min6 is flat zero,
+  # judge improvement on aggregate so the counter measures real progress.
+  if (( $(python3 -c "print(1 if max($score,$BEST_SCORE) > 0 else 0)") )); then
+    metric="min6"; improved=$(python3 -c "print(1 if $score > $BEST_SCORE + 1e-9 else 0)")
+  else
+    metric="agg";  improved=$(python3 -c "print(1 if $agg > $BEST_AGG + 1e-9 else 0)")
+  fi
   if [[ "$improved" == "1" ]]; then
     cp "$rundir/best_roster.zip" "$BEST/model.zip"
     cp "$rundir/best_roster_vecnormalize.pkl" "$BEST/vecnormalize.pkl"
@@ -169,14 +181,14 @@ for (( i=1; i<=MAX_RUNS; i++ )); do
     cp "$rundir/eval_strict_1.json" "$BEST/eval_strict_1.json"
     cp "$rundir/eval_strict_2.json" "$BEST/eval_strict_2.json"
     cp "$rundir/elo.json" "$BEST/elo.json"
-    BEST_W=$w; BEST_R=$r; BEST_H=$h; BEST_G=$g; BEST_HHC=$hhc; BEST_BR=$br; BEST_ELO=$ELO; BEST_SCORE=$score
+    BEST_W=$w; BEST_R=$r; BEST_H=$h; BEST_G=$g; BEST_HHC=$hhc; BEST_BR=$br; BEST_ELO=$ELO; BEST_SCORE=$score; BEST_AGG=$agg
     no_improve=0
-    log "iter $i: NEW GLOBAL BEST score=$score (w=$w r=$r h=$h g=$g hhc=$hhc br=$br) elo=$ELO"
+    log "iter $i: NEW GLOBAL BEST score=$score agg=$agg [$metric] (w=$w r=$r h=$h g=$g hhc=$hhc br=$br) elo=$ELO"
   else
     no_improve=$((no_improve+1))
-    log "iter $i: score=$score (w=$w r=$r h=$h g=$g hhc=$hhc br=$br) elo=$ELO -- no improvement ($no_improve/$PATIENCE)"
+    log "iter $i: score=$score agg=$agg [$metric] (w=$w r=$r h=$h g=$g hhc=$hhc br=$br) elo=$ELO -- no improvement ($no_improve/$PATIENCE)"
   fi
-  echo "{\"iter\": $i, \"rundir\": \"$rundir\", \"w\": $w, \"r\": $r, \"h\": $h, \"g\": $g, \"hhc\": $hhc, \"br\": $br, \"score\": $score, \"elo\": \"$ELO\", \"improved\": $improved}" \
+  echo "{\"iter\": $i, \"rundir\": \"$rundir\", \"w\": $w, \"r\": $r, \"h\": $h, \"g\": $g, \"hhc\": $hhc, \"br\": $br, \"score\": $score, \"agg\": $agg, \"metric\": \"$metric\", \"elo\": \"$ELO\", \"improved\": $improved}" \
     >> "$CAMP/results.jsonl"
   write_status "$i" "$BEST_SCORE" "$BEST_W" "$BEST_R" "$BEST_H" "$BEST_G" "$BEST_HHC" "$BEST_BR" "$BEST_ELO" \
     "last iter score=$score (w=$w r=$r h=$h g=$g hhc=$hhc br=$br) elo=$ELO"
