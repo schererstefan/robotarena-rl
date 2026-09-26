@@ -109,8 +109,11 @@ class League:
                 chosen = snaps[-1]
             else:
                 chosen = snaps[int(rng.integers(0, len(snaps) - 1))]
+            # Pluto upgrade: snapshots also play a random strategy arm so the
+            # learner meets label-conditioned opponents (arm is per-episode).
             return {"policy": {"weights": chosen,
-                               "deterministic": self.deterministic_snapshots}}
+                               "deterministic": self.deterministic_snapshots,
+                               "strategy": int(rng.integers(0, 4))}}
         return {"bot": self._sample_scripted(rng)}
 
     def describe_last(self) -> dict[str, Any]:

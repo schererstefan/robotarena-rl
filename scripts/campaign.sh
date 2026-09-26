@@ -49,14 +49,18 @@ mkdir -p "$BEST"
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$CAMP/campaign.log"; }
 
 strict_eval() {
-  # $1=model.zip $2=vecnormalize.pkl $3=out_prefix
+  # $1=model.zip $2=vecnormalize.pkl $3=out_prefix [$4=bandit.json]
   # prints 6 win rates (w r h g hhc br) averaged over 2 strict evals; empty on failure
-  local m="$1" v="$2" o="$3"
+  local m="$1" v="$2" o="$3" b="${4:-}"
+  local bandit_flag=()
+  [[ -n "$b" && -f "$b" ]] && bandit_flag=(--bandit "$b")
   # NOTE: eval_roster.py has no shebang; invoke via the venv python explicitly.
   .venv/bin/python scripts/eval_roster.py "$m" "$v" --bots $GATE_BOTS \
-    --episodes 20 --arena open --out "${o}_1.json" > /dev/null 2>&1 || return 1
+    --episodes 20 --arena open "${bandit_flag[@]}" \
+    --out "${o}_1.json" > /dev/null 2>&1 || return 1
   .venv/bin/python scripts/eval_roster.py "$m" "$v" --bots $GATE_BOTS \
-    --episodes 20 --arena open --out "${o}_2.json" > /dev/null 2>&1 || return 1
+    --episodes 20 --arena open "${bandit_flag[@]}" \
+    --out "${o}_2.json" > /dev/null 2>&1 || return 1
   .venv/bin/python - "$o" <<'PYEOF' 2>/dev/null || return 1
 import json, sys
 o = sys.argv[1]
@@ -96,9 +100,15 @@ EOF
 [[ -f "$SEED_DIR/best_roster_vecnormalize.pkl" ]] || { echo "missing vecnormalize"; exit 1; }
 cp "$SEED_DIR/best_roster.zip" "$BEST/model.zip"
 cp "$SEED_DIR/best_roster_vecnormalize.pkl" "$BEST/vecnormalize.pkl"
+# Pluto upgrade: the strategy bandit travels with the checkpoint.
+if [[ -f "$SEED_DIR/bandit/strategy_bandit.json" ]]; then
+  cp "$SEED_DIR/bandit/strategy_bandit.json" "$BEST/bandit.json"
+else
+  .venv/bin/python -c "import sys; sys.path.insert(0, '.'); from rl.bandit import StrategyBandit; StrategyBandit('$BEST/bandit.json').save()"
+fi
 log "campaign start: seeded global best from $SEED_DIR (max_runs=$MAX_RUNS)"
 
-SEED_RATES=$(strict_eval "$BEST/model.zip" "$BEST/vecnormalize.pkl" "$CAMP/seed_eval") || SEED_RATES=""
+SEED_RATES=$(strict_eval "$BEST/model.zip" "$BEST/vecnormalize.pkl" "$CAMP/seed_eval" "$BEST/bandit.json") || SEED_RATES=""
 SEED_ELO=$(tourney_eval "$BEST/model.zip" "$BEST/vecnormalize.pkl" "$CAMP/seed_elo.json") || SEED_ELO="?"
 if [[ -n "$SEED_RATES" ]]; then
   read -r BEST_W BEST_R BEST_H BEST_G BEST_HHC BEST_BR <<< "$SEED_RATES"
@@ -115,9 +125,10 @@ stop_reason=""
 for (( i=1; i<=MAX_RUNS; i++ )); do
   stamp=$(date +%Y%m%d-%H%M%S)
   rundir="runs/ppo_campaign_${i}_${stamp}"
-  mkdir -p "$rundir/league"
+  mkdir -p "$rundir/league" "$rundir/bandit"
   cp "$BEST/model.zip" "$rundir/model.zip"
   cp "$BEST/vecnormalize.pkl" "$rundir/vecnormalize.pkl"
+  cp "$BEST/bandit.json" "$rundir/bandit/strategy_bandit.json"
   log "=== iteration $i/$MAX_RUNS: $rundir (seeded from best score=$BEST_SCORE) ==="
 
   # Validated self-play blend from iteration 6 (Stefan, Sep 22, 2026):
@@ -140,7 +151,7 @@ for (( i=1; i<=MAX_RUNS; i++ )); do
   fi
 
   RATES=$(strict_eval "$rundir/best_roster.zip" "$rundir/best_roster_vecnormalize.pkl" \
-    "$rundir/eval_strict") || RATES=""
+    "$rundir/eval_strict" "$rundir/bandit/strategy_bandit.json") || RATES=""
   ELO=$(tourney_eval "$rundir/best_roster.zip" "$rundir/best_roster_vecnormalize.pkl" \
     "$rundir/elo.json") || ELO="?"
   if [[ -z "$RATES" ]]; then
@@ -154,6 +165,7 @@ for (( i=1; i<=MAX_RUNS; i++ )); do
   if [[ "$improved" == "1" ]]; then
     cp "$rundir/best_roster.zip" "$BEST/model.zip"
     cp "$rundir/best_roster_vecnormalize.pkl" "$BEST/vecnormalize.pkl"
+    cp "$rundir/bandit/strategy_bandit.json" "$BEST/bandit.json"
     cp "$rundir/eval_strict_1.json" "$BEST/eval_strict_1.json"
     cp "$rundir/eval_strict_2.json" "$BEST/eval_strict_2.json"
     cp "$rundir/elo.json" "$BEST/elo.json"

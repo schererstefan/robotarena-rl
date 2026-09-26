@@ -23,6 +23,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
 from .anchor import AnchorKLPPO
+from .bandit import BANDIT_FILENAME, StrategyBandit
 from .env import ACTION_DIMS, OBS_DIM, RobotArenaEnv
 from .export_ts import export_weights, norm_from_vecnormalize
 from .league import League
@@ -170,7 +171,12 @@ class WinRateEvalCallback(BaseCallback):
             for ep in range(self.episodes_per_bot):
                 env = RobotArenaEnv(
                     opponent_sampler=lambda rng, b=bot: {"bot": b},
-                    arena=self.arena, loadout=self.loadout)
+                    arena=self.arena, loadout=self.loadout,
+                    # Pluto upgrade: eval the deployed system — best bandit
+                    # arm per opponent (falls back to arm 0 pre-bandit).
+                    bandit_path=os.path.join(self.run_dir, "bandit",
+                                             BANDIT_FILENAME),
+                    bandit_mode="best")
                 venv = VecNormalize(DummyVecEnv([lambda: env]),
                                     norm_obs=True, norm_reward=False,
                                     training=False)
@@ -285,6 +291,48 @@ class RollbackCallback(BaseCallback):
         return True
 
 
+class BanditCallback(BaseCallback):
+    """Aggregate per-episode (opponent, strategy arm, won) reports into the
+    shared strategy-bandit JSON (Pluto lesson #4).
+
+    Worker envs select arms via UCB1 by live-reading the JSON each episode
+    (same pattern as the PFSP file); this callback is the single writer.
+    Writes are atomic (tmp + os.replace) every ``save_every`` reported
+    episodes and at training end.
+    """
+
+    def __init__(self, run_dir: str, save_every: int = 200, verbose: int = 0):
+        super().__init__(verbose)
+        self.bandit_path = os.path.join(run_dir, "bandit", BANDIT_FILENAME)
+        self.bandit = StrategyBandit(self.bandit_path)
+        self.save_every = int(save_every)
+        self._since_save = 0
+        self._episodes = 0
+
+    def _on_step(self) -> bool:
+        for info in self.locals.get("infos", []):
+            b = info.get("bandit")
+            if not b:
+                continue
+            self.bandit.update(b["opponent"], b["arm"], b["won"])
+            self._episodes += 1
+            self._since_save += 1
+        if self._since_save >= self.save_every:
+            self.bandit.save()
+            self._since_save = 0
+            counts = self.bandit.arm_counts()
+            for arm, n in counts.items():
+                self.logger.record(f"bandit/pulls_{arm}", n)
+            if self.verbose:
+                print(f"[bandit] saved {self.bandit_path} "
+                      f"({self._episodes} episodes, pulls={counts})",
+                      flush=True)
+        return True
+
+    def _on_training_end(self) -> None:
+        self.bandit.save()
+
+
 # Env factory
 # ---------------------------------------------------------------------------
 def make_env_fn(rank: int, cfg: dict, run_dir: str):
@@ -304,6 +352,8 @@ def make_env_fn(rank: int, cfg: dict, run_dir: str):
             arena=cfg["env"].get("arena", "open"),
             loadout=cfg["env"].get("loadout", {}),
             reward_weights=cfg["env"].get("reward_weights"),
+            bandit_path=os.path.join(run_dir, "bandit", BANDIT_FILENAME),
+            bandit_mode="ucb",
         )
         return env
     return _init
@@ -346,6 +396,15 @@ def main() -> None:
         os.makedirs(os.path.join(run_dir, "league"), exist_ok=True)
         with open(os.path.join(run_dir, "config.yaml"), "w") as f:
             yaml.safe_dump(cfg, f)
+
+    # Strategy bandit (Pluto lesson #4): shared JSON, written by
+    # BanditCallback, live-read by worker envs for UCB1 arm selection.
+    bandit_dir = os.path.join(run_dir, "bandit")
+    os.makedirs(bandit_dir, exist_ok=True)
+    bandit_path = os.path.join(bandit_dir, BANDIT_FILENAME)
+    if not os.path.exists(bandit_path):
+        StrategyBandit(bandit_path).save()
+        print(f"bandit: initialized {bandit_path}", flush=True)
 
     # KL anchor (Experiment 1, Sep 2026): on resume, freeze the iteration
     # seed (the global best) as the frozen reference policy + its obs stats.
@@ -470,6 +529,8 @@ def main() -> None:
         eval_callback=eval_cb,
         min_aggregate=cfg["league"].get("min_roster_rate", 0.0))
     callbacks.append(snapshot_cb)
+    # Pluto upgrade: per-opponent strategy bandit writer.
+    callbacks.append(BanditCallback(run_dir=run_dir, verbose=1))
 
     print(f"run_dir={run_dir} total_timesteps={total_timesteps} "
           f"obs_dim={OBS_DIM} action_dims={ACTION_DIMS}", flush=True)

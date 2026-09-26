@@ -11,7 +11,7 @@ from rl.env import RobotArenaEnv
 
 env = RobotArenaEnv(opponent_sampler=lambda rng: {"bot": "wanderer"})
 obs, info = env.reset(seed=0)
-assert obs.shape == (128,), obs.shape
+assert obs.shape == (516,), obs.shape  # 4x128 stacked + 4-dim strategy one-hot
 assert obs.dtype == np.float32
 rewards, terms, truncs = [], 0, 0
 ep = 0

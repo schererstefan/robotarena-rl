@@ -24,6 +24,9 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "win": 15.0,
     "loss": -15.0,
     "draw": 0.0,
+    # Pluto upgrade (Sep 2026):
+    "diversity": 0.0,   # one-time per-episode bonus per ability first-used
+    "opening": 0.0,     # per-tick opening-alignment nudge (first 600 ticks)
 }
 
 _AIM_TOL = 0.05  # radians — "aimed" threshold for the fireLead bonus (hunter-like 0.05 rad)

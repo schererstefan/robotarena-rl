@@ -30,7 +30,7 @@ import torch as th
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecNormalize
 
-from .env import ACTION_DIMS, OBS_DIM
+from .env import ACTION_DIMS, FRAME_DIM, OBS_DIM
 
 
 def load_norm(vecnormalize_path: str | None) -> dict | None:
@@ -176,7 +176,7 @@ def verify(weights: dict, model: PPO, weights_path: str,
 
 def sample_realistic_obs(rng: np.random.Generator) -> np.ndarray:
     """Sample a raw obs with plausible per-feature ranges (pre-normalization)."""
-    o = np.zeros((OBS_DIM,), dtype=np.float64)
+    o = np.zeros((FRAME_DIM,), dtype=np.float64)  # one raw bridge frame
     # 0-1: position, 2-3: speed, 4-7: tower/chassis sin/cos, 8-9: health/heat
     o[0:2] = rng.uniform(0, 1, 2)
     o[2] = rng.uniform(0, 1)
@@ -236,7 +236,11 @@ def sample_realistic_obs(rng: np.random.Generator) -> np.ndarray:
     o[120] = rng.uniform(0, 1)
     o[121:123] = rng.uniform(0, 1, 2)
     o[123] = rng.uniform(-3, 3)
-    return o
+    # Pluto upgrade: the policy consumes 4 stacked frames + a strategy
+    # one-hot (516 dims). Tile one realistic frame x4 + arm-0 one-hot.
+    oh = np.zeros((4,), dtype=np.float64)
+    oh[0] = 1.0
+    return np.concatenate([o, o, o, o, oh])
 
 
 ROBOT_TEMPLATE = """// Exported RobotArena RL policy — drop into src/robots/ and register it.
@@ -254,7 +258,16 @@ export const meta: RobotMeta = {{
 export const loadout = __LOADOUT__;
 
 const W_DIMS = __ACTION_DIMS__;
-const OBS_DIM = __OBS_DIM__;
+const OBS_DIM = __OBS_DIM__; // 516 = 4 stacked 128-dim frames + 4-dim strategy one-hot
+const FRAME_DIM = 128;
+const FRAMES = 4;
+const N_STRAT = 4;
+// Strategy conditioning (Pluto lesson #4). Default arm is baked at export
+// from the bandit file (--bandit); override per match via setStrategyArm().
+let STRATEGY_ARM = __DEFAULT_STRAT__;
+export function setStrategyArm(i: number): void {
+    STRATEGY_ARM = Math.max(0, Math.min(N_STRAT - 1, Math.floor(i)));
+}
 // weights: layers of {{W: [out][in], b: [out]}}; activation between layers, linear head
 const ACT = '__ACTIVATION__' as 'tanh' | 'relu';
 const LAYERS: Array<{{ W: number[][]; b: number[] }}> = __WEIGHTS__;
@@ -299,8 +312,17 @@ function argmax(xs: number[]): number {{
 {OBS_BUILDER}
 
 export function create(): RobotController {{
+    // Frame-stack buffer: memory lives in the net (Pluto lesson #1).
+    // Pre-filled with the first obs, mirroring rl/env.py reset().
+    let frames: number[][] = [];
     function update(sense: SenseState): Intent {{
-        const obs = normalizeObs(buildObs(sense));
+        const raw = buildObs(sense);
+        frames.push(raw);
+        if (frames.length > FRAMES) frames.shift();
+        while (frames.length < FRAMES) frames.unshift(frames[0]);
+        const oh = [0, 0, 0, 0];
+        oh[STRATEGY_ARM] = 1;
+        const obs = normalizeObs(([] as number[]).concat(...frames, oh));
         const logits = mlp(obs);
         const a: number[] = [];
         let off = 0;
@@ -336,7 +358,16 @@ def main() -> None:
                     help="path to vecnormalize.pkl; defaults to <model_dir>/vecnormalize.pkl")
     ap.add_argument("--node", default="node",
                     help="node binary for the Node.js numeric check")
+    ap.add_argument("--bandit", default=None,
+                    help="path to strategy_bandit.json; the overall-best arm "
+                         "is baked in as the default strategy (default: 0)")
     args = ap.parse_args()
+
+    default_strat = 0
+    if args.bandit and os.path.exists(args.bandit):
+        from .bandit import StrategyBandit
+        default_strat = StrategyBandit(args.bandit).overall_best()
+        print(f"default strategy arm {default_strat} from {args.bandit}")
 
     model = PPO.load(args.model)
     vn_path = args.vecnormalize
@@ -458,6 +489,7 @@ def main() -> None:
         .replace("__NORM_VAR__", json.dumps(norm["var"])) \
         .replace("__NORM_EPS__", repr(float(norm["epsilon"]))) \
         .replace("__NORM_CLIP__", repr(float(norm["clip_obs"]))) \
+        .replace("__DEFAULT_STRAT__", str(default_strat)) \
         .replace("{OBS_BUILDER}", builder)
     # The template above is written with doubled braces; collapse to real TS.
     robot_src = robot_src.replace("{{", "{").replace("}}", "}")

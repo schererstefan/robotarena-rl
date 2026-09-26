@@ -24,12 +24,15 @@ from rl.env import RobotArenaEnv
 from rl.evaluate import DEFAULT_EVAL_LOADOUT
 
 
-def eval_bot(model, vecnorm_path, bot, episodes, arena, loadout):
+def eval_bot(model, vecnorm_path, bot, episodes, arena, loadout, bandit_path=None):
     wins = losses = draws = 0
     for _ in range(episodes):
         env = RobotArenaEnv(
             opponent_sampler=lambda rng, b=bot: {"bot": b},
-            arena=arena, loadout=loadout)
+            arena=arena, loadout=loadout,
+            # Pluto upgrade: eval the deployed system — best bandit arm per
+            # opponent (arm 0 when no bandit file is given).
+            bandit_path=bandit_path, bandit_mode="best")
         venv = DummyVecEnv([lambda: env])
         if vecnorm_path:
             venv = VecNormalize.load(vecnorm_path, venv)
@@ -65,6 +68,8 @@ def main():
                          'Default: canonical DEFAULT_EVAL_LOADOUT. '
                          'Scripted opponents always keep their registry loadout.')
     ap.add_argument("--out", default=None, help="write raw JSON results here")
+    ap.add_argument("--bandit", default=None,
+                    help="path to strategy_bandit.json for best-arm eval")
     args = ap.parse_args()
 
     model = PPO.load(args.model)
@@ -83,7 +88,7 @@ def main():
     }
     for bot in args.bots:
         r = eval_bot(model, args.vecnormalize, bot, args.episodes,
-                     args.arena, loadout)
+                     args.arena, loadout, bandit_path=args.bandit)
         results["results"][bot] = r
         print(f"{bot}: W{r['wins']} L{r['losses']} D{r['draws']} "
               f"win_rate={r['win_rate']:.2f}", flush=True)

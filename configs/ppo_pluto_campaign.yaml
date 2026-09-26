@@ -1,0 +1,63 @@
+# Pluto upgrade campaign config: league v2 scaffolding (permanent 70% scripted
+# floor, PFSP, KL anchor, rollback gate, min-of-6 scoring) + pluto upgrades:
+# frame-stacked obs (516-dim), strategy bandit conditioning, scaled MLP
+# (~2.1M params), diversity + opening rewards.
+run_name: ppo_pluto
+seed: 13
+
+env:
+  n_envs: 8
+  arena: open
+  loadout: { overdrive: 2, trigger: 2, plating: 2 }
+  reward_weights:
+    dealt: 2.0
+    taken: -1.0
+    aim: 0.003
+    fireLead: 0.03
+    dodge: 0.005
+    diversity: 0.05
+    opening: 0.002
+    win: 10.0
+    loss: -10.0
+
+league:
+  scripted: [rusher, rusher, hunter, wanderer, ghost, ghost, hunter-hc2, brawler, brawler]
+  p_scripted: 0.70
+  p_latest: 0.5
+  max_snapshots: 8
+  min_roster_rate: 0.55
+  pfsp_exponent: 1.5
+  uniform_mix: 0.2
+
+anchor:
+  enabled: true
+  kl_coef: 0.05
+  anneal: true
+
+rollback:
+  enabled: true
+  max_drop: 0.05
+  patience: 2
+
+ppo:
+  n_steps: 2048
+  n_epochs: 10
+  batch_size: 1024
+  learning_rate: 3.0e-4
+  lr_schedule: linear
+  gamma: 0.999
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [1024, 1024, 512]
+  ortho_init: true
+
+training:
+  total_timesteps: 8000000
+  checkpoint_freq: 25
+  snapshot_freq: 10
+  eval_freq: 10
+  eval_bots: [wanderer, rusher, hunter, ghost, hunter-hc2, brawler]
+  eval_episodes: 10

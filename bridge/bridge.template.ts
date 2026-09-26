@@ -332,12 +332,22 @@ function actionToIntent(a: number[]): Intent {
     };
 }
 
-function makePolicyController(weightsPath: string, deterministic: boolean, maxHealth: number): RobotController {
+// Pluto upgrade: the policy consumes 4 stacked 128-dim frames + a 4-dim
+// strategy one-hot (516 dims). The bridge still emits 128-dim frames;
+// stacking happens here, mirroring rl/env.py (pre-fill with first obs).
+const FRAME_STACK = 4;
+const N_STRATEGIES = 4;
+const POLICY_OBS_DIM = FRAME_STACK * OBS_DIM + N_STRATEGIES;
+
+function makePolicyController(weightsPath: string, deterministic: boolean, maxHealth: number, strategy?: number): RobotController {
     const raw = fs.readFileSync(weightsPath, 'utf8');
     const w = JSON.parse(raw) as PolicyWeights;
-    if (w.obs_dim !== OBS_DIM) {
-        throw new Error(`weights obs_dim ${w.obs_dim} != bridge OBS_DIM ${OBS_DIM}`);
+    if (w.obs_dim !== POLICY_OBS_DIM) {
+        throw new Error(`weights obs_dim ${w.obs_dim} != bridge POLICY_OBS_DIM ${POLICY_OBS_DIM}`);
     }
+    // Strategy arm is fixed per match (uniform random unless specified).
+    const arm = strategy !== undefined ? strategy : Math.floor(Math.random() * N_STRATEGIES);
+    let frames: number[][] = [];
     return {
         meta: {
             id: 'rl-policy',
@@ -348,7 +358,13 @@ function makePolicyController(weightsPath: string, deterministic: boolean, maxHe
         },
         loadout: {},
         update(sense: SenseState): Intent {
-            const obs = buildObs(sense, { maxHealth, myTeam: sense.self.team as 0 | 1 });
+            const frame = buildObs(sense, { maxHealth, myTeam: sense.self.team as 0 | 1 });
+            frames.push(frame);
+            if (frames.length > FRAME_STACK) frames.shift();
+            while (frames.length < FRAME_STACK) frames.unshift(frames[0]);
+            const oh = [0, 0, 0, 0];
+            oh[arm] = 1;
+            const obs = ([] as number[]).concat(...frames, oh);
             const logits = mlpForward(w, normalizeObs(w, obs));
             return actionToIntent(decodeAction(logits, w.action_dims, deterministic));
         },
@@ -419,9 +435,9 @@ interface Session {
 }
 
 function resolveOpponent(spec: unknown, maxHealth: number): RobotController {
-    const s = spec as { bot?: string; policy?: { weights: string; deterministic?: boolean } };
+    const s = spec as { bot?: string; policy?: { weights: string; deterministic?: boolean; strategy?: number } };
     if (s && typeof s === 'object' && s.policy && typeof s.policy.weights === 'string') {
-        return makePolicyController(s.policy.weights, s.policy.deterministic === true, maxHealth);
+        return makePolicyController(s.policy.weights, s.policy.deterministic === true, maxHealth, s.policy.strategy);
     }
     const botId = (s && typeof s.bot === 'string' && s.bot) || 'wanderer';
     const entry = getRobot(botId);
