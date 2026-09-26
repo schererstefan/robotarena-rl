@@ -139,7 +139,11 @@ class WinRateEvalCallback(BaseCallback):
         self.loadout = loadout
         # On resume, seed best-so-far from existing history so a resumed run
         # never "improves" to something worse than the previous best.
+        # Selection is lexicographic: min-of-six primary, aggregate tiebreak.
+        # (A flat min6, e.g. all zeros early on, must not lock best_roster to
+        # the first checkpoint forever.)
         self.best_min6 = -1.0
+        self.best_aggregate = -1.0
         # Latest deterministic roster stats; consumed by SnapshotCallback
         # (aggregate, as the validated-admission gate) and RollbackCallback
         # (min-of-six, as the non-regression gate).
@@ -152,11 +156,15 @@ class WinRateEvalCallback(BaseCallback):
                     if not line:
                         continue
                     try:
-                        m6 = json.loads(line).get("min6_win_rate")
+                        rec = json.loads(line)
+                        m6 = rec.get("min6_win_rate")
+                        ag = rec.get("aggregate_win_rate")
                     except (json.JSONDecodeError, ValueError):
                         continue
-                    if m6 is not None and m6 > self.best_min6:
+                    if m6 is not None and (m6, ag if ag is not None else -1.0) > (
+                            self.best_min6, self.best_aggregate):
                         self.best_min6 = m6
+                        self.best_aggregate = ag if ag is not None else -1.0
 
     def _on_step(self) -> bool:
         if self.num_timesteps < self._next:
@@ -231,8 +239,11 @@ class WinRateEvalCallback(BaseCallback):
         os.replace(tmp, self.pfsp_path)
         self.logger.record("eval/aggregate_win_rate", agg)
         self.logger.record("eval/min6_win_rate", min6)
-        if min6 > self.best_min6 + 1e-9:
+        if (min6 > self.best_min6 + 1e-9 or
+                (abs(min6 - self.best_min6) <= 1e-9 and
+                 agg > self.best_aggregate + 1e-9)):
             self.best_min6 = min6
+            self.best_aggregate = agg
             self.model.save(os.path.join(self.run_dir, "best_roster.zip"))
             train_env.save(os.path.join(self.run_dir,
                                         "best_roster_vecnormalize.pkl"))
