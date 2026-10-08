@@ -32,8 +32,8 @@ FRAME_STACK = 4          # Pluto lesson #1: temporal memory in the net
 N_STRATS = N_STRATEGIES  # strategy-label conditioning (Pluto lesson #4)
 OBS_DIM = FRAME_STACK * FRAME_DIM + N_STRATS  # 516
 OPENING_TICKS = 600      # opening-alignment shaping applies below this tick
-NODE_BIN = (shutil.which("node") or "/opt/homebrew/bin/node"
-            or "/usr/local/bin/node")
+NODE_BIN = (os.environ.get("ROBOTARENA_NODE") or shutil.which("node")
+            or "/opt/homebrew/bin/node" or "/usr/local/bin/node")
 _BRIDGE_REL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "bridge", "dist", "bridge.mjs")
 

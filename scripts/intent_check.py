@@ -1,9 +1,13 @@
 """Verify learner intents actually move the robot (intent plumbing check)."""
 import json
+import os
+import shutil
 import subprocess
 
-BRIDGE = "/Users/stefan/dev/robotarena-rl/bridge/dist/bridge.mjs"
-NODE = "/opt/homebrew/bin/node"
+BRIDGE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "bridge", "dist", "bridge.mjs")
+NODE = (os.environ.get("ROBOTARENA_NODE") or shutil.which("node")
+        or "/opt/homebrew/bin/node")
 
 
 def run_match(intent_fn, steps=600, seed=42):

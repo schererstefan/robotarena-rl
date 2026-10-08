@@ -1,6 +1,10 @@
-torch>=2.4
-stable-baselines3>=2.4
-gymnasium>=1.0
-numpy>=1.24
-pyyaml>=6.0
-tensorboard>=2.15
+# Pinned to the versions actually installed in the Mac mini .venv
+# (Python 3.14.7, `pip freeze` 2026-10-07). stable-baselines3 is pinned
+# tightly on purpose: rl/anchor.py copies SB3 2.9.0's PPO.train() verbatim,
+# so re-verify that file against the installed SB3 source before bumping it.
+torch==2.14.0
+stable-baselines3==2.9.0
+gymnasium==1.3.0
+numpy==2.5.3
+pyyaml==6.0.3
+tensorboard==2.21.0

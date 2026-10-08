@@ -10,7 +10,7 @@ real game sim running headless.
 ┌─────────────┐  JSONL over stdio   ┌──────────────────────────┐
 │ Python      │◄──────────────────►│ Node bridge (bridge.mjs) │
 │ gymnasium   │  reset/step        │  real Match engine,      │
-│ env + SB3   │  obs[124]          │  tick-for-tick           │
+│ env + SB3   │  obs[128]          │  tick-for-tick           │
 │ PPO         │  reward            │                          │
 └─────────────┘                    └──────────────────────────┘
 ```
@@ -19,9 +19,12 @@ real game sim running headless.
   `Match` engine tick-for-tick. A bridge-controlled robot returns the pending
   intent queued by Python; the opponent is a scripted registry bot or an
   exported policy snapshot running its MLP in plain TS.
-- **Obs:** 124-dim float vector — self state, 2 nearest foes, stale tracks,
-  6 nearest bullets, walls, safe zone, turrets, pickup pads, match state,
-  last-tick events. See `bridge/OBS_SPEC.md`.
+- **Obs:** 128-dim raw frame per tick — self state, 2 nearest foes, stale
+  tracks, 6 nearest bullets, walls, safe zone, turrets, pickup pads, match
+  state, last-tick events (layout: `bridge/OBS_SPEC.md`). The policy input is
+  516 dims: 4 stacked 128-dim frames (4 x 128 = 512) + a 4-dim strategy
+  one-hot (rush/kite/greedy/control), per `FRAME_STACK`/`FRAME_DIM`/`OBS_DIM`
+  in `rl/env.py`.
 - **Actions:** `MultiDiscrete([5,5,5,2,2,2,2])` → throttle/turn/towerTurn in
   5 bins (−1…1) + fire/charge/dash/emp booleans.
 - **Reward:** dense damage deltas (±1 per 100 HP) + kill/death (±3) +
