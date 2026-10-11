@@ -32,6 +32,11 @@ FRAME_STACK = 4          # Pluto lesson #1: temporal memory in the net
 N_STRATS = N_STRATEGIES  # strategy-label conditioning (Pluto lesson #4)
 OBS_DIM = FRAME_STACK * FRAME_DIM + N_STRATS  # 516
 OPENING_TICKS = 600      # opening-alignment shaping applies below this tick
+# Named obs indices mirroring bridge/OBS_SPEC.md:7-18.
+SELF_SPEED = 6
+FOE_PRESENT = 17
+BULLET_BASE = 38
+TICK = 121
 NODE_BIN = (shutil.which("node") or "/opt/homebrew/bin/node"
             or "/usr/local/bin/node")
 _BRIDGE_REL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -71,6 +76,35 @@ def _pad_dist(raw: np.ndarray, base: int, n: int) -> float | None:
         d = _math.hypot(dx, dy) / 960.0
         if best is None or d < best:
             best = d
+    return best
+
+
+def dodge_perp(raw) -> float:
+    """Best perpendicular-motion fraction (0..~1) vs incoming bullets. Pure, no bridge."""
+    speed = float(raw[SELF_SPEED]) * 375.0
+    if speed <= 20.0:
+        return 0.0
+    heading = _math.atan2(raw[2], raw[3])
+    vx = speed * _math.cos(heading)
+    vy = speed * _math.sin(heading)
+    best = 0.0
+    for i in range(6):
+        b = BULLET_BASE + i * 6
+        if raw[b] < 0.5:
+            continue
+        closing = raw[b + 4] * 430.0
+        dist = raw[b + 3] * 540.0
+        if closing < 50.0 or dist > 350.0 or dist < 1e-6:
+            continue
+        bx = raw[b + 1] * 960.0
+        by = raw[b + 2] * 640.0
+        norm = _math.hypot(bx, by)
+        if norm < 1e-6:
+            continue
+        px, py = -by / norm, bx / norm
+        perp = abs(vx * px + vy * py) / 375.0
+        if perp > best:
+            best = perp
     return best
 
 
@@ -230,33 +264,14 @@ class RobotArenaEnv(gym.Env):
                                        firing=firing)
         # Dodge: reward moving perpendicular to incoming bullets.
         # A bullet on collision course is dodged by sidestepping, not by
-        # outrunning it. Computed from raw obs (pre-VecNormalize).
+        # outrunning it. Computed from raw obs (pre-VecNormalize);
+        # see dodge_perp helper above.
         dodge_w = self._weights.get("dodge", 0.0)
         if dodge_w != 0.0:
-            speed = raw[5] * 375.0
-            if speed > 20.0:
-                heading = _math.atan2(raw[2], raw[3])
-                vx = speed * _math.cos(heading)
-                vy = speed * _math.sin(heading)
-                best = 0.0
-                for i in range(6):
-                    b = 38 + i * 6
-                    if raw[b] < 0.5:
-                        continue
-                    closing = raw[b + 4] * 430.0
-                    dist = raw[b + 3] * 540.0
-                    if closing < 50.0 or dist > 350.0 or dist < 1e-6:
-                        continue
-                    # bullet relative pos; perpendicular direction
-                    bx = raw[b + 1] * 960.0
-                    by = raw[b + 2] * 640.0
-                    px, py = -by / dist, bx / dist
-                    perp = abs(vx * px + vy * py) / 375.0
-                    if perp > best:
-                        best = perp
-                if best > 0:
-                    reward += dodge_w * best
-                    rinfo["reward/dodge"] = dodge_w * best
+            best = dodge_perp(raw)
+            if best > 0:
+                reward += dodge_w * best
+                rinfo["reward/dodge"] = dodge_w * best
         # Diversity (Pluto lesson #3): one-time per-episode bonus for the
         # first use of each ability. Small anti-mode-collapse nudge.
         div_w = self._weights.get("diversity", 0.0)
@@ -273,7 +288,7 @@ class RobotArenaEnv(gym.Env):
         open_w = self._weights.get("opening", 0.0)
         prev = self._prev_raw
         if open_w != 0.0 and prev is not None:
-            tick = float(raw[121]) * 11400.0
+            tick = float(raw[TICK]) * 11400.0
             if tick < OPENING_TICKS:
                 bonus = self._opening_bonus(raw, prev)
                 if bonus > 0.0:
@@ -298,7 +313,7 @@ class RobotArenaEnv(gym.Env):
         arm = self._arm
         if arm == 0 or arm == 1:
             # rush: close the foe / kite: open distance (foe slot 0).
-            if raw[17] < 0.5 or prev[17] < 0.5:
+            if raw[FOE_PRESENT] < 0.5 or prev[FOE_PRESENT] < 0.5:
                 return 0.0
             delta = float(prev[20] - raw[20])  # + means closing
             return max(0.0, delta) if arm == 0 else max(0.0, -delta)

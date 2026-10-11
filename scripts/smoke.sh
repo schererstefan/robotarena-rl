@@ -2,6 +2,8 @@
 # Smoke test: build bridge, run a random policy through the env.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Dodge obs-index regression (pure Python, no bridge).
+.venv/bin/python scripts/dodge_check.py
 
 ./bridge/build.sh
 
