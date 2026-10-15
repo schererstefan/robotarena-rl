@@ -68,6 +68,21 @@ def test_benign_vecnormalize_round_trip(tmp_path):
     assert stats["clip_obs"] == pytest.approx(vn.clip_obs)
 
 
+def test_benign_vecnormalize_older_protocol_round_trip(tmp_path):
+    # Pickles written at protocol <= 3 (older numpy/gymnasium writers)
+    # reconstruct ndarrays via numpy._core.multiarray._reconstruct
+    # with numpy.ndarray as its subtype argument, instead of the
+    # protocol-5 _frombuffer path a current writer emits. Both
+    # same-family reconstruction globals are allowlisted; a benign
+    # file in the older shape must still load.
+    path = tmp_path / "vecnormalize-p3.pkl"
+    vn = _write_benign_vecnormalize(path)
+    with open(path, "wb") as f:
+        pickle.dump(vn, f, protocol=3)
+    stats = load_vecnormalize_stats(path)
+    np.testing.assert_allclose(stats["mean"], vn.obs_rms.mean)
+    np.testing.assert_allclose(stats["var"], vn.obs_rms.var)
+
 def test_malicious_reduce_payload_rejected(tmp_path):
     if os.path.exists(PWNED):
         os.unlink(PWNED)

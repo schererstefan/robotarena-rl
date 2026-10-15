@@ -7,7 +7,7 @@ workflow, so the two *direct* pickle sites that only need observation
 normalization stats -- ``rl/anchor.py`` (anchor stats) and
 ``rl/export_ts.py:load_norm`` -- must not unpickle unrestricted.
 
-``RestrictedUnpickler`` allowlists exactly the globals found by a
+``RestrictedUnpickler`` allowlists the globals found by a
 ``pickletools`` opcode scan (no execution) of real
 ``runs/*/vecnormalize.pkl`` / ``anchor_vecnormalize.pkl`` files at
 ``pluto-upgrade@b651eb8`` (SB3 2.9.0 / gymnasium 1.3.0 / numpy 2.5.3):
@@ -16,6 +16,12 @@ normalization stats -- ``rl/anchor.py`` (anchor stats) and
 * ``gymnasium.spaces`` ``Box`` + ``MultiDiscrete`` (embedded spaces)
 * ``numpy.dtype``, ``numpy._core.multiarray.scalar``,
   ``numpy._core.numeric._frombuffer`` (ndarray reconstruction)
+  plus numpy._core.multiarray._reconstruct -- the same-family ndarray
+  reconstruction callable other numpy/gymnasium versions emit instead
+  (observed in CI with gymnasium 1.4.0, where a benign round-trip
+  pickle references it; its subtype argument is itself resolved
+  through find_class, so it can only build allowlisted types;
+  with numpy.ndarray as the subtype argument, the plain array type)
 * numpy RNG constructors embedded in a seeded space:
   ``numpy.random._pickle.__generator_ctor`` / ``__bit_generator_ctor``,
   ``numpy.random._pcg64.PCG64``,
@@ -54,7 +60,9 @@ _ALLOWED_GLOBALS = frozenset({
     ("gymnasium.spaces.box", "Box"),
     ("gymnasium.spaces.multi_discrete", "MultiDiscrete"),
     ("numpy", "dtype"),
+    ("numpy", "ndarray"),
     ("numpy._core.multiarray", "scalar"),
+    ("numpy._core.multiarray", "_reconstruct"),
     ("numpy._core.numeric", "_frombuffer"),
     ("numpy.random._pickle", "__generator_ctor"),
     ("numpy.random._pickle", "__bit_generator_ctor"),
