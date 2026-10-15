@@ -24,13 +24,13 @@ SB3 source before upgrading the dependency.
 """
 from __future__ import annotations
 
-import pickle
-
 import numpy as np
 import torch as th
 from stable_baselines3 import PPO
 from stable_baselines3.common.utils import explained_variance
 from torch.nn import functional as F
+
+from .safe_pickle import load_vecnormalize_stats
 
 
 class AnchorKLPPO(PPO):
@@ -68,13 +68,16 @@ class AnchorKLPPO(PPO):
             for p in self.anchor_policy.parameters():
                 p.requires_grad_(False)
         if self.anchor_vecnormalize_path:
-            with open(self.anchor_vecnormalize_path, "rb") as f:
-                vn = pickle.load(f)
+            # Restricted unpickler: a vecnormalize.pkl is executable
+            # pickle; only its obs stats are needed here. See
+            # rl/safe_pickle.py (SB3-mediated PPO.load above stays
+            # trusted-local-only).
+            stats = load_vecnormalize_stats(self.anchor_vecnormalize_path)
             self._anchor_mean = th.as_tensor(
-                np.asarray(vn.obs_rms.mean, dtype=np.float32),
+                np.asarray(stats["mean"], dtype=np.float32),
                 device=self.device)
             self._anchor_var = th.as_tensor(
-                np.asarray(vn.obs_rms.var, dtype=np.float32),
+                np.asarray(stats["var"], dtype=np.float32),
                 device=self.device)
 
     def _excluded_save_params(self) -> list[str]:
