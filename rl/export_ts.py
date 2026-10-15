@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import pickle
 import subprocess
 
 import numpy as np
@@ -31,19 +30,21 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecNormalize
 
 from .env import ACTION_DIMS, FRAME_DIM, OBS_DIM
+from .safe_pickle import load_vecnormalize_stats
 
 
 def load_norm(vecnormalize_path: str | None) -> dict | None:
     """Read VecNormalize obs stats from a .pkl into a JSON-able dict."""
     if not vecnormalize_path or not os.path.exists(vecnormalize_path):
         return None
-    with open(vecnormalize_path, "rb") as f:
-        vn = pickle.load(f)
+    # Restricted unpickler: a vecnormalize.pkl is executable pickle;
+    # only its obs stats are needed here. See rl/safe_pickle.py.
+    stats = load_vecnormalize_stats(vecnormalize_path)
     return {
-        "mean": np.asarray(vn.obs_rms.mean).reshape(-1).tolist(),
-        "var": np.asarray(vn.obs_rms.var).reshape(-1).tolist(),
-        "epsilon": float(vn.epsilon),
-        "clip_obs": float(vn.clip_obs),
+        "mean": np.asarray(stats["mean"]).reshape(-1).tolist(),
+        "var": np.asarray(stats["var"]).reshape(-1).tolist(),
+        "epsilon": float(stats["epsilon"]),
+        "clip_obs": float(stats["clip_obs"]),
     }
 
 
