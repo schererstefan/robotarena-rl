@@ -149,6 +149,11 @@ class WinRateEvalCallback(BaseCallback):
         # (min-of-six, as the non-regression gate).
         self.last_aggregate = None
         self.last_min6 = None
+        # Monotonic count of completed evals. Consumers that poll
+        # last_min6 every training step (RollbackCallback) use this
+        # as the distinct-eval identity, so a stale value held between
+        # evals is not mistaken for a new eval on every step.
+        self.eval_count = 0
         if os.path.exists(self.history_path):
             with open(self.history_path) as f:
                 for line in f:
@@ -219,6 +224,7 @@ class WinRateEvalCallback(BaseCallback):
         min6 = float(min(results[b]["win_rate"] for b in self.bots))
         self.last_aggregate = agg
         self.last_min6 = min6
+        self.eval_count += 1
         with open(self.history_path, "a") as f:
             f.write(json.dumps({
                 "timesteps": self.num_timesteps,
@@ -274,11 +280,31 @@ class RollbackCallback(BaseCallback):
         self.patience = int(patience)
         self.reference: float | None = None
         self.bad = 0
+        # Identity of the last eval this callback has consumed. _on_step
+        # runs every training step, but last_min6 only changes when the
+        # eval callback completes a new eval; without this guard the
+        # same stale eval would be counted once per step and patience
+        # would stop training steps (not evals) after the first drop.
+        self._last_eval_count: int | None = None
+        self._last_min6: float | None = None
 
     def _on_step(self) -> bool:
         m = self.eval_callback.last_min6
         if m is None:
             return True
+        # Distinct-eval guard: only act once per completed eval. The
+        # eval callback's eval_count is the authoritative identity (two
+        # successive evals may share the same min6 value); fall back to
+        # the value itself for eval callbacks without a counter, where
+        # only consecutive repeats can be recognised as duplicates.
+        eval_count = getattr(self.eval_callback, "eval_count", None)
+        if eval_count is not None:
+            if eval_count == self._last_eval_count:
+                return True
+            self._last_eval_count = eval_count
+        elif self._last_min6 is not None and m == self._last_min6:
+            return True
+        self._last_min6 = m
         if self.reference is None:
             self.reference = m
             if self.verbose:
