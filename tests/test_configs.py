@@ -33,15 +33,18 @@ configs legitimately name bots such as ``ghost`` and ``hunter-hc2``
 that are not members of any single hard-coded roster.
 
 Scope: pure and bridge-free, mirroring tests/test_pure.py -- imports
-only stdlib + yaml + pytest. Nothing imports ``rl.train`` (which
-pulls torch/stable_baselines3), ``rl.env``, or spawns anything, so
-this runs on a stock hosted runner. Configs are discovered by
-globbing ``configs/*.yaml`` (plus ``*.yml``) at import time, so new
-configs are covered automatically.
+only stdlib + yaml + pytest. ``DEFAULT_WEIGHTS`` is loaded directly
+from ``rl/reward.py`` by file path (that module is stdlib-only)
+without importing the ``rl`` package, so nothing pulls ``rl.env`` /
+``rl.train`` / torch / SB3 / gymnasium, and nothing is spawned; this
+runs on a stock hosted runner. Configs are discovered by globbing
+``configs/*.yaml`` (plus ``*.yml``) at import time, so new configs
+are covered automatically.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import math
 from pathlib import Path
 
@@ -55,6 +58,25 @@ CONFIG_PATHS = sorted(
     if p.is_file()
 )
 CONFIG_IDS = [p.name for p in CONFIG_PATHS]
+
+
+def _load_default_weights() -> dict[str, float]:
+    # Load rl/reward.py by file path, not via ``from rl.reward import
+    # ...``: importing the ``rl`` package runs rl/__init__.py ->
+    # rl.env -> gymnasium/numpy, defeating this module's stdlib +
+    # yaml + pytest purity. rl/reward.py itself is stdlib-only, so
+    # exec'ing it by path is safe and keeps heavy deps out.
+    reward_path = Path(__file__).resolve().parents[1] / "rl" / "reward.py"
+    spec = importlib.util.spec_from_file_location("rl_reward", reward_path)
+    assert spec is not None and spec.loader is not None, (
+        f"could not load rl/reward.py from {reward_path}"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.DEFAULT_WEIGHTS
+
+
+DEFAULT_WEIGHTS = _load_default_weights()
 
 # Top-level sections rl/train.py dereferences unconditionally.
 REQUIRED_SECTIONS = ("ppo", "env", "training", "league")
@@ -307,4 +329,46 @@ def test_optional_sections_are_mappings(config_path: Path):
             f"{config_path.name}: optional section {name!r} must "
             f"be a mapping, got {type(cfg[name]).__name__}"
         )
+
+
+def test_reward_weight_keys_are_declared_in_default_weights():
+    # rl/env.py merges env.reward_weights over DEFAULT_WEIGHTS and
+    # reads shaping weights via .get(key, 0.0), so a config key with
+    # no DEFAULT_WEIGHTS entry has no declared default and is
+    # silently ignored unless some .get() happens to use that exact
+    # name (a typo'd key would never take effect). Declaring every
+    # used key in DEFAULT_WEIGHTS keeps it the single source of
+    # truth for which reward weights exist.
+    used_keys: set[str] = set()
+    for config_path in CONFIG_PATHS:
+        cfg = _load_config(config_path)
+        env = cfg.get("env")
+        if env is None:
+            continue
+        assert isinstance(env, dict), (
+            f"{config_path.name}: 'env' must be a mapping, "
+            f"got {type(env).__name__}"
+        )
+        reward_weights = env.get("reward_weights")
+        if reward_weights is None:
+            continue
+        assert isinstance(reward_weights, dict), (
+            f"{config_path.name}: env.reward_weights must be a "
+            f"mapping, got {type(reward_weights).__name__}"
+        )
+        used_keys.update(reward_weights.keys())
+    assert used_keys, (
+        f"no env.reward_weights keys found in any config in "
+        f"{CONFIG_DIR}; discovery or config shape changed and this "
+        f"guard would pass vacuously"
+    )
+    undeclared = used_keys - set(DEFAULT_WEIGHTS)
+    assert not undeclared, (
+        f"configs use env.reward_weights keys missing from "
+        f"rl/reward.py DEFAULT_WEIGHTS: {sorted(undeclared)}; "
+        f"undeclared keys have no default and are silently ignored "
+        f"unless rl/env.py reads that exact name via .get(...) -- "
+        f"declare each key in DEFAULT_WEIGHTS (use 0.0 for opt-in "
+        f"shaping) or remove it from the configs"
+    )
 
