@@ -33,7 +33,7 @@ Notes:
   components are computed from exact snapshot diffs instead, so this lag only
   affects the two reserved/pickup/turret indicator dims.
 - `OBS_DIM` is asserted at runtime — the bridge throws if the builder drifts.
-- Dims 119/121 (leadFeat) carry the bridge-computed first-order target lead: the foe's velocity (heading+speed from SenseState) is extrapolated over the bullet time-of-flight, and the signed error between the lead bearing and the tower angle is exposed as sin/cos (0/1 when no foe is visible). The policy cannot infer foe velocity from a single frame (obs has foe speed but not direction), so the bridge computes the lead directly. Saved weights stay valid: these dims were constant 0 before 2026-09-22.
+- Dims 123/125 (leadFeat) carry the bridge-computed first-order target lead: the foe's velocity (heading+speed from SenseState) is extrapolated over the bullet time-of-flight, and the signed error between the lead bearing and the tower angle is exposed as sin/cos (0/1 when no foe is visible). The policy cannot infer foe velocity from a single frame (obs has foe speed but not direction), so the bridge computes the lead directly. Saved weights stay valid: these dims were constant 0 before 2026-09-22.
 - The exported policy (`rl/export_ts.py`) and the in-bridge policy opponent
   both consume exactly this layout; changing it invalidates saved weights.
 
