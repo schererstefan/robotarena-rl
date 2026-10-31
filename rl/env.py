@@ -59,6 +59,7 @@ BRIDGE_RPC_TIMEOUT = _env_float("ROBOTARENA_BRIDGE_RPC_TIMEOUT", 30.0)
 BRIDGE_SHUTDOWN_TIMEOUT = _env_float("ROBOTARENA_BRIDGE_SHUTDOWN_TIMEOUT", 2.0)
 BRIDGE_TERMINATE_TIMEOUT = _env_float("ROBOTARENA_BRIDGE_TERMINATE_TIMEOUT", 3.0)
 _STDERR_TAIL_MAXLEN = 200  # bridge stderr lines retained for diagnostics
+_MAX_BRIDGE_LINE_CHARS = 1_000_000  # replies are a few KB; cap runaway lines
 
 _INTENT_KEYS = ["throttle", "turn", "towerTurn", "fire", "charge", "dash", "emp"]
 # Boolean ability action indices (for the diversity bonus).
@@ -80,6 +81,43 @@ def action_to_intent(action: np.ndarray) -> dict[str, Any]:
 
 class BridgeError(RuntimeError):
     pass
+
+
+def _validate_raw_obs(resp: Any) -> np.ndarray:
+    """Return the bridge frame as float32, or raise BridgeError.
+
+    The Node bridge validates its own obs length, but the Python side
+    must not trust the wire: a short/long/non-finite frame would
+    silently shift the stacked observation away from OBS_DIM or poison
+    training with NaN/inf, surfacing later as cryptic shape errors.
+    """
+    if not isinstance(resp, dict):
+        raise BridgeError(
+            f"bridge response is not an object (obs unavailable): {resp!r:.200}")
+    if "obs" not in resp:
+        raise BridgeError("bridge response missing 'obs'")
+    obs = resp["obs"]
+    if not isinstance(obs, list):
+        raise BridgeError(f"bridge obs is not a list: {type(obs).__name__}")
+    if len(obs) != FRAME_DIM:
+        raise BridgeError(
+            f"bridge obs length {len(obs)} != FRAME_DIM {FRAME_DIM}")
+    for i, value in enumerate(obs):
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+                value, (int, float, np.integer, np.floating)):
+            raise BridgeError(f"bridge obs[{i}] is not a number: {value!r:.100}")
+        try:
+            finite = _math.isfinite(float(value))
+        except OverflowError as exc:
+            raise BridgeError(
+                f"bridge obs[{i}] is not finite: {value!r:.100}") from exc
+        if not finite:
+            raise BridgeError(f"bridge obs[{i}] is not finite: {value!r:.100}")
+    with np.errstate(over="ignore", invalid="ignore"):
+        arr = np.asarray(obs, dtype=np.float32)
+    if not np.all(np.isfinite(arr)):
+        raise BridgeError("bridge obs is not finite after float32 conversion")
+    return arr
 
 
 def _pad_dist(raw: np.ndarray, base: int, n: int) -> float | None:
@@ -282,7 +320,20 @@ class RobotArenaEnv(gym.Env):
             self._stdout_eof = True
             raise BridgeError(
                 f"bridge closed stdout; stderr: {self._stderr_text()}")
-        resp = json.loads(line)
+        if len(line) > _MAX_BRIDGE_LINE_CHARS:
+            raise BridgeError(
+                f"bridge line too large: {len(line)} chars exceeds "
+                f"{_MAX_BRIDGE_LINE_CHARS}; stderr: {self._stderr_text()}")
+        try:
+            resp = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise BridgeError(
+                f"bridge sent malformed JSON ({exc}); "
+                f"line: {line[:200]!r}; stderr: {self._stderr_text()}") from exc
+        if not isinstance(resp, dict):
+            raise BridgeError(
+                f"bridge sent malformed JSON response (not an object): "
+                f"{resp!r:.200}; stderr: {self._stderr_text()}")
         if resp.get("type") == "error":
             raise BridgeError(resp.get("message", "unknown bridge error"))
         return resp
@@ -315,6 +366,9 @@ class RobotArenaEnv(gym.Env):
         tried.add(arm)
         return arm
 
+    # Exposed so callers/tests can validate a raw bridge reply via the env.
+    _validate_raw_obs = staticmethod(_validate_raw_obs)
+
     def _stacked_obs(self) -> np.ndarray:
         oh = np.zeros((N_STRATS,), dtype=np.float32)
         oh[self._arm] = 1.0
@@ -335,7 +389,7 @@ class RobotArenaEnv(gym.Env):
         resp = self._rpc({"cmd": "reset", "seed": opp_seed,
                           "opponent": opponent, "arena": self._arena,
                           "loadout": self._loadout})
-        raw = np.asarray(resp["obs"], dtype=np.float32)
+        raw = _validate_raw_obs(resp)
         self._frames = deque([raw.copy() for _ in range(FRAME_STACK)],
                              maxlen=FRAME_STACK)
         self._prev_raw = raw.copy()
@@ -352,7 +406,7 @@ class RobotArenaEnv(gym.Env):
         intent = action_to_intent(action)
         firing = bool(action[3] == 1)
         resp = self._rpc({"cmd": "step", "intent": intent})
-        raw = np.asarray(resp["obs"], dtype=np.float32)
+        raw = _validate_raw_obs(resp)
         components = resp.get("components", {})
         terminated = bool(resp.get("terminated", False))
         truncated = bool(resp.get("truncated", False))
