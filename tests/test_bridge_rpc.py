@@ -10,7 +10,11 @@ three failure modes that used to hang or leak silently:
   (deadlocked before stderr was drained continuously),
 - a bridge that never replies (RPC must time out, raise BridgeError
   carrying the stderr tail, and kill the bridge),
-- close() reaping a process that ignores both shutdown and SIGTERM.
+- close() reaping a process that ignores both shutdown and SIGTERM,
+- short / over-long / NaN / inf / missing obs frames and malformed
+  JSON replies, which must surface as BridgeError from reset()/step()
+  instead of silently shifting the stacked-obs shape or leaking raw
+  KeyError/JSONDecodeError into training.
 """
 
 import sys
@@ -58,7 +62,36 @@ while True:
         sys.stderr.flush()
         time.sleep(60)
     elif cmd == "reset":
-        send({"type": "state", "obs": [0.0] * 128, "info": {}})
+        if mode == "short":
+            send({"type": "state", "obs": [0.0] * 127, "info": {}})
+        elif mode == "long":
+            send({"type": "state", "obs": [0.0] * 129, "info": {}})
+        elif mode == "nan":
+            send({"type": "state", "obs": [0.0] * 127 + [float("nan")],
+                  "info": {}})
+        elif mode == "inf":
+            send({"type": "state", "obs": [float("inf")] + [0.0] * 127,
+                  "info": {}})
+        elif mode == "missing_obs":
+            send({"type": "state", "info": {}})
+        elif mode == "badjson":
+            sys.stdout.write("not json{\n")
+            sys.stdout.flush()
+        elif mode == "nonobject":
+            sys.stdout.write("[1, 2, 3]\n")
+            sys.stdout.flush()
+        else:
+            send({"type": "state", "obs": [0.0] * 128, "info": {}})
+    elif cmd == "step":
+        if mode == "badstep":
+            send({"type": "step", "obs": [0.0] * 3, "components": {},
+                  "terminated": False, "truncated": False, "info": {}})
+        elif mode == "badjson":
+            sys.stdout.write("not json{\n")
+            sys.stdout.flush()
+        else:
+            send({"type": "step", "obs": [0.0] * 128, "components": {},
+                  "terminated": False, "truncated": False, "info": {}})
     elif cmd == "shutdown":
         send({"type": "bye"})
         if mode != "stubborn":
@@ -122,3 +155,103 @@ def test_close_reaps_stubborn_process(monkeypatch, fake_bridge):
     env.close()  # shutdown is acked but ignored; SIGTERM is ignored too
     assert env._proc.poll() is not None
     env.close()  # idempotent
+
+
+@pytest.mark.parametrize("mode", ["short", "long", "nan", "inf", "missing_obs"])
+def test_reset_rejects_invalid_obs(monkeypatch, fake_bridge, mode):
+    env = make_env(monkeypatch, fake_bridge, mode)
+    try:
+        with pytest.raises(BridgeError, match="obs"):
+            env.reset(seed=0)
+    finally:
+        env.close()
+
+
+def test_step_rejects_invalid_obs(monkeypatch, fake_bridge):
+    env = make_env(monkeypatch, fake_bridge, "badstep")
+    try:
+        obs, _info = env.reset(seed=0)
+        assert obs.shape == (OBS_DIM,)
+        with pytest.raises(BridgeError, match="obs"):
+            env.step([0, 0, 0, 0, 0, 0, 0])
+    finally:
+        env.close()
+
+
+def test_step_round_trip(monkeypatch, fake_bridge):
+    env = make_env(monkeypatch, fake_bridge, "normal")
+    try:
+        env.reset(seed=0)
+        obs, _reward, terminated, truncated, _info = env.step(
+            [0, 0, 0, 0, 0, 0, 0])
+        assert obs.shape == (OBS_DIM,)
+        assert not terminated and not truncated
+    finally:
+        env.close()
+
+
+def test_malformed_json_raises_bridge_error(monkeypatch, fake_bridge):
+    env = make_env(monkeypatch, fake_bridge, "badjson")
+    try:
+        with pytest.raises(BridgeError, match="malformed"):
+            env.reset(seed=0)
+    finally:
+        env.close()
+
+
+def test_nonobject_json_raises_bridge_error(monkeypatch, fake_bridge):
+    env = make_env(monkeypatch, fake_bridge, "nonobject")
+    try:
+        with pytest.raises(BridgeError, match="malformed"):
+            env.reset(seed=0)
+    finally:
+        env.close()
+
+
+def test_rpc_rejects_oversized_line(monkeypatch, fake_bridge):
+    env = make_env(monkeypatch, fake_bridge, "normal")
+    monkeypatch.setattr(env_mod, "_MAX_BRIDGE_LINE_CHARS", 5, raising=False)
+    try:
+        with pytest.raises(BridgeError, match="too large"):
+            env._rpc({"cmd": "anything"})
+    finally:
+        env.close()
+
+
+def test_validate_raw_obs_accepts_valid_frame():
+    from rl.env import FRAME_DIM, _validate_raw_obs
+
+    arr = _validate_raw_obs({"obs": [0.0] * FRAME_DIM})
+    assert arr.shape == (FRAME_DIM,)
+    assert str(arr.dtype) == "float32"
+    ints = _validate_raw_obs({"obs": [0] * FRAME_DIM})
+    assert ints.shape == (FRAME_DIM,)
+    assert RobotArenaEnv._validate_raw_obs(
+        {"obs": [0.0] * FRAME_DIM}).shape == (FRAME_DIM,)
+
+
+@pytest.mark.parametrize(
+    "resp",
+    [
+        {},
+        {"obs": None},
+        {"obs": "not-a-list"},
+        {"obs": [0.0] * 127},
+        {"obs": [0.0] * 129},
+        {"obs": [float("nan")] + [0.0] * 127},
+        {"obs": [float("inf")] + [0.0] * 127},
+        {"obs": [float("-inf")] + [0.0] * 127},
+        {"obs": ["0.0"] + [0.0] * 127},
+        {"obs": [None] + [0.0] * 127},
+        {"obs": [True] + [0.0] * 127},
+        {"obs": [[0.0]] + [0.0] * 127},
+        {"obs": [1e100] + [0.0] * 127},
+        {"obs": [10**400] + [0.0] * 127},
+        "not-a-dict",
+    ],
+)
+def test_validate_raw_obs_rejects_invalid(resp):
+    from rl.env import _validate_raw_obs
+
+    with pytest.raises(BridgeError):
+        _validate_raw_obs(resp)
