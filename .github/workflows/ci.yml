@@ -1,7 +1,8 @@
-# Scope is pure tests + compileall only. The Node-bridge smoke test
-# (scripts/smoke.sh) is intentionally NOT run here because it needs the
-# sibling robotarena checkout and a built bridge, unavailable on stock
-# hosted runners.
+# Scope is pure tests + dodge guard + compileall only. The dodge guard
+# (scripts/dodge_check.py) is pure Python and runs as part of this gate.
+# The Node-bridge smoke test (scripts/smoke.sh) is intentionally NOT
+# run here because it needs the sibling robotarena checkout and a built
+# bridge, unavailable on stock hosted runners.
 name: CI
 
 on:
@@ -36,5 +37,7 @@ jobs:
           pip install -r requirements.txt pytest
       - name: Run pure tests
         run: pytest tests/ -q
+      - name: Run dodge check
+        run: python scripts/dodge_check.py
       - name: Compile check
         run: python -m compileall rl scripts
