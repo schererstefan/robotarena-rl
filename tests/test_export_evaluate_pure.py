@@ -26,8 +26,13 @@ import math
 import numpy as np
 import pytest
 
+from rl.env import (
+    EVENT_BASE, FOE_BASE, FOE_DIST, FRAME_DIM, FRAME_STACK, MATCH_BASE,
+    N_STRATS, OBS_DIM, PAD_BASE, TRACK_BASE, TURRET_BASE, WALL_BASE,
+    ZONE_BASE,
+)
 from rl.evaluate import BASE_ELO, K, elo_update
-from rl.export_ts import normalize_obs, numpy_forward
+from rl.export_ts import normalize_obs, numpy_forward, sample_realistic_obs
 
 
 def _weights(layers, activation="tanh", norm=None):
@@ -292,3 +297,158 @@ def test_elo_draw_unequal_ratings_move_toward_each_other():
     assert ra2 > ra  # lower-rated gains from a draw
     assert rb2 < rb  # higher-rated loses from a draw
     assert rb2 - ra2 < rb - ra  # ratings move toward each other
+
+
+# -- sample_realistic_obs ---------------------------------------------------
+# These tests pin the export verifier sampler to the live 128-dim
+# layout in bridge/OBS_SPEC.md:7-18 (the layout buildObs emits), so
+# the next spec change breaks a test instead of hollowing out
+# verify(). All dim numbers below are literal, taken straight from
+# the spec, so they cross-check the shared rl.env bases rather than
+# following them.
+
+_LEAD_SIN = EVENT_BASE + 1  # 123
+_LEAD_COS = EVENT_BASE + 3  # 125
+
+
+def _frame(seed):
+    return sample_realistic_obs(np.random.default_rng(seed))[:FRAME_DIM]
+
+
+def _frames(n=200, seed0=10_000):
+    return [_frame(seed0 + i) for i in range(n)]
+
+
+def test_env_index_constants_match_obs_spec_bases():
+    assert FOE_BASE == 17
+    assert FOE_DIST == 20
+    assert TRACK_BASE == 33
+    assert WALL_BASE == 74
+    assert ZONE_BASE == 78
+    assert TURRET_BASE == 82
+    assert PAD_BASE == 94
+    assert MATCH_BASE == 118
+    assert EVENT_BASE == 122
+
+
+def test_sample_realistic_obs_shape_dtype_stack_and_onehot():
+    out = sample_realistic_obs(np.random.default_rng(0))
+    assert out.shape == (OBS_DIM,) == (516,)
+    assert out.dtype == np.float64
+    first = out[:FRAME_DIM]
+    for k in range(1, FRAME_STACK):
+        np.testing.assert_array_equal(
+            out[k * FRAME_DIM:(k + 1) * FRAME_DIM], first)
+    assert N_STRATS == 4
+    np.testing.assert_array_equal(out[-4:], [1.0, 0.0, 0.0, 0.0])
+
+
+def test_sample_realistic_obs_deterministic_for_seed():
+    a = sample_realistic_obs(np.random.default_rng(7))
+    b = sample_realistic_obs(np.random.default_rng(7))
+    np.testing.assert_array_equal(a, b)
+    c = sample_realistic_obs(np.random.default_rng(8))
+    assert not np.array_equal(a, c)
+
+
+def test_sample_realistic_obs_ranges_over_many_samples():
+    flag_dims = {10, 13, 33, 79, 81, 122, 124, 126, 127}
+    flag_dims.update(FOE_BASE + 8 * s for s in range(2))
+    flag_dims.update(38 + 6 * s for s in range(6))
+    flag_dims.update(TURRET_BASE + 6 * s + k for s in range(2)
+                     for k in (0, 3, 4))
+    flag_dims.update(PAD_BASE + 6 * s for s in range(4))
+    flag_dims.update(PAD_BASE + 6 * s + k for s in range(4)
+                     for k in (3, 4, 5))
+    sincos_dims = [2, 3, 4, 5, 15, 16, _LEAD_SIN, _LEAD_COS]
+    sincos_dims += [FOE_BASE + 8 * s + k for s in range(2) for k in (4, 5)]
+    unit_dims = [0, 1, 6, 7, 8, 9, 11, 12, 14]  # self [0,1] dims
+    unit_dims += [FOE_BASE + 8 * s + k for s in range(2) for k in (3, 6, 7)]
+    unit_dims += [TRACK_BASE + 3, TRACK_BASE + 4]
+    unit_dims += [38 + 6 * s + k for s in range(6) for k in (3, 4, 5)]
+    unit_dims += [WALL_BASE + k for k in range(4)]
+    unit_dims += [ZONE_BASE, ZONE_BASE + 2]
+    unit_dims += [MATCH_BASE, MATCH_BASE + 1, 121]
+    signed_dims = [FOE_BASE + 8 * s + k for s in range(2) for k in (1, 2)]
+    signed_dims += [TRACK_BASE + 1, TRACK_BASE + 2]
+    signed_dims += [38 + 6 * s + k for s in range(6) for k in (1, 2)]
+    signed_dims += [TURRET_BASE + 6 * s + k for s in range(2)
+                    for k in (1, 2, 5)]
+    signed_dims += [PAD_BASE + 6 * s + k for s in range(4) for k in (1, 2)]
+
+    for o in _frames():
+        assert np.all(np.isfinite(o))
+        for d in flag_dims:
+            assert o[d] == 0.0 or o[d] == 1.0, (d, o[d])
+        for d in sincos_dims:
+            assert -1.0 <= o[d] <= 1.0, (d, o[d])
+        for d in unit_dims:
+            assert 0.0 <= o[d] <= 1.0, (d, o[d])
+        for d in signed_dims:
+            assert -1.0 <= o[d] <= 1.0, (d, o[d])
+        # Self sin/cos pairs: heading, tower, lastDamage bearing.
+        for a, b in ((2, 3), (4, 5), (15, 16)):
+            assert o[a] ** 2 + o[b] ** 2 == pytest.approx(1.0, abs=1e-9)
+        # Walls derived from the sampled self position.
+        assert o[WALL_BASE] == o[0]
+        assert o[WALL_BASE + 1] == 1.0 - o[0]
+        assert o[WALL_BASE + 2] == o[1]
+        assert o[WALL_BASE + 3] == 1.0 - o[1]
+        # Foes: bearing unit-circle when present, slot zero when absent.
+        for s in range(2):
+            b = FOE_BASE + 8 * s
+            if o[b] == 1.0:
+                assert o[b + 4] ** 2 + o[b + 5] ** 2 == pytest.approx(
+                    1.0, abs=1e-9)
+            else:
+                np.testing.assert_array_equal(o[b:b + 8], np.zeros(8))
+        # Track: the rest of the slot stays 0 when seenNow = 0.
+        if o[TRACK_BASE] == 0.0:
+            np.testing.assert_array_equal(
+                o[TRACK_BASE:TRACK_BASE + 5], np.zeros(5))
+        # Bullets: the slot stays 0 when present = 0.
+        for s in range(6):
+            b = 38 + 6 * s
+            if o[b] == 0.0:
+                np.testing.assert_array_equal(o[b:b + 6], np.zeros(6))
+        # Turrets: owner flags never both 1; slot zero when inactive.
+        for s in range(2):
+            b = TURRET_BASE + 6 * s
+            assert o[b + 3] + o[b + 4] <= 1.0
+            if o[b] == 0.0:
+                np.testing.assert_array_equal(o[b:b + 6], np.zeros(6))
+        # Pads: kind one-hot iff active; slot zero when inactive.
+        for s in range(4):
+            b = PAD_BASE + 6 * s
+            kind_sum = o[b + 3] + o[b + 4] + o[b + 5]
+            if o[b] == 1.0:
+                assert kind_sum == 1.0
+            else:
+                assert kind_sum == 0.0
+                np.testing.assert_array_equal(o[b:b + 6], np.zeros(6))
+        # Match: kills quantized to k/5, aliveFoes to k/3.
+        for d in (MATCH_BASE, MATCH_BASE + 1):
+            assert o[d] * 5 == pytest.approx(round(float(o[d] * 5)),
+                                              abs=1e-9)
+        assert any(o[MATCH_BASE + 2] == pytest.approx(v, abs=1e-12)
+                   for v in (0.0, 1 / 3, 2 / 3, 1.0))
+        # leadFeat: unit circle with a foe, exactly (0, 1) without one.
+        if o[FOE_BASE] == 1.0 or o[FOE_BASE + 8] == 1.0:
+            assert o[_LEAD_SIN] ** 2 + o[_LEAD_COS] ** 2 == pytest.approx(
+                1.0, abs=1e-9)
+        else:
+            assert o[_LEAD_SIN] == 0.0 and o[_LEAD_COS] == 1.0
+
+
+def test_sample_realistic_obs_events_actually_exercised():
+    frames = _frames()
+    assert any(o[EVENT_BASE] == 1.0 for o in frames)        # wasHit
+    assert any(o[EVENT_BASE + 2] == 1.0 for o in frames)    # gotKill
+    assert any(o[EVENT_BASE + 4] == 1.0 for o in frames)    # pickup
+    assert any(o[EVENT_BASE + 5] == 1.0 for o in frames)    # turret-captured
+    assert len({float(o[_LEAD_COS]) for o in frames}) > 1
+    # Both leadFeat branches are hit across the draws.
+    assert any(o[FOE_BASE] == 1.0 or o[FOE_BASE + 8] == 1.0
+               for o in frames)
+    assert any(o[FOE_BASE] == 0.0 and o[FOE_BASE + 8] == 0.0
+               for o in frames)
