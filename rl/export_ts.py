@@ -4,7 +4,7 @@ The weights JSON feeds two consumers:
   1. the Node bridge policy opponent (league self-play), and
   2. `robot_<name>.ts` — a drop-in RobotArena robot file (see below).
 
-Layout: {"obs_dim": 128, "action_dims": [5,5,5,2,2,2,2],
+Layout: {"obs_dim": 516, "action_dims": [5,5,5,2,2,2,2],
           "activation": "tanh",
           "norm": {"mean": [...], "var": [...], "epsilon": 1e-8,
                    "clip_obs": 10.0},   # VecNormalize stats (optional)
@@ -29,7 +29,11 @@ import torch as th
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecNormalize
 
-from .env import ACTION_DIMS, FRAME_DIM, OBS_DIM
+from .env import (
+    ACTION_DIMS, BULLET_BASE, EVENT_BASE, FOE_BASE, FRAME_DIM,
+    FRAME_STACK, MATCH_BASE, N_STRATS, OBS_DIM, PAD_BASE, TICK,
+    TRACK_BASE, TURRET_BASE, WALL_BASE, ZONE_BASE,
+)
 from .safe_pickle import load_vecnormalize_stats
 
 
@@ -147,8 +151,9 @@ def verify(weights: dict, model: PPO, weights_path: str,
            n: int = 5, tol: float = 1e-4, node_bin: str = "node") -> None:
     """3-way check: torch vs numpy vs Node.js, on raw obs (norm in the loop).
 
-    Raw obs are sampled from realistic ranges (positions, angles, health…)
-    rather than uniform(-1, 1), so the VecNormalize path is exercised.
+    Raw obs are drawn from sample_realistic_obs, which follows the
+    live bridge layout (see bridge/OBS_SPEC.md), rather than
+    uniform(-1, 1), so the VecNormalize path is exercised.
     """
     rng = np.random.default_rng(0)
     worst = 0.0
@@ -176,72 +181,142 @@ def verify(weights: dict, model: PPO, weights_path: str,
 
 
 def sample_realistic_obs(rng: np.random.Generator) -> np.ndarray:
-    """Sample a raw obs with plausible per-feature ranges (pre-normalization)."""
-    o = np.zeros((FRAME_DIM,), dtype=np.float64)  # one raw bridge frame
-    # 0-1: position, 2-3: speed, 4-7: tower/chassis sin/cos, 8-9: health/heat
-    o[0:2] = rng.uniform(0, 1, 2)
-    o[2] = rng.uniform(0, 1)
-    o[3] = rng.uniform(0, 1)
-    a = rng.uniform(-np.pi, np.pi, 2)
-    o[4:6] = np.sin(a[0]), np.cos(a[0])
-    o[6:8] = np.sin(a[1]), np.cos(a[1])
-    o[8] = rng.uniform(0, 1)
-    o[9] = rng.uniform(0, 1)
-    # 10-12: cooldowns, 13: overdrive, 14-17: enemy dir/dash/emp, 18-19: alive
-    o[10:13] = rng.uniform(0, 1, 3)
-    o[13] = rng.uniform(0, 1)
-    o[14:16] = np.sin(a[0]), np.cos(a[0])
-    o[16] = rng.uniform(0, 1)
-    o[17] = rng.uniform(0, 1)
-    o[18] = rng.choice([0.0, 1.0])
-    o[19] = rng.choice([0.0, 1.0])
-    # 20-43: two foe slots of 12
+    """Sample a raw obs with plausible per-feature ranges (pre-normalization).
+
+    Drawn section by section against the live 128-dim layout in
+    bridge/OBS_SPEC.md:7-18 (which bridge.template.ts ``buildObs``
+    emits), so verify() exercises the VecNormalize path on inputs
+    shaped like real bridge frames. Section bases come from rl.env,
+    so this sampler shares one index source of truth with the env.
+    Pin: tests/test_export_evaluate_pure.py.
+    """
+    o = np.zeros((FRAME_DIM,), dtype=np.float64)
+
+    def flag() -> float:
+        return float(rng.integers(0, 2))
+
+    def angle() -> float:
+        return float(rng.uniform(-np.pi, np.pi))
+
+    # -- self 0-16 --
+    o[0] = rng.uniform(0, 1)   # x/960
+    o[1] = rng.uniform(0, 1)   # y/640
+    a = angle()
+    o[2], o[3] = np.sin(a), np.cos(a)   # sin/cos(heading)
+    a = angle()
+    o[4], o[5] = np.sin(a), np.cos(a)   # sin/cos(tower)
+    o[6] = rng.uniform(0, 1)   # speed
+    o[7] = rng.uniform(0, 1)   # health
+    o[8] = rng.uniform(0, 1)   # cooldown/24
+    o[9] = rng.uniform(0, 1)   # charge
+    o[10] = flag()             # charged
+    o[11] = rng.uniform(0, 1)  # dashCd/480
+    o[12] = rng.uniform(0, 1)  # empCd/720
+    o[13] = flag()             # slowed
+    o[14] = rng.uniform(0, 1)  # lastDamage/100
+    a = angle()
+    o[15], o[16] = np.sin(a), np.cos(a)  # lastDamage bearing - heading
+
+    # -- foes 17-32 (2 slots x 8) --
+    any_foe = False
     for s in range(2):
-        b = s * 12
-        o[20 + b] = rng.choice([0.0, 1.0])
-        o[21 + b:23 + b] = np.sin(a[0]), np.cos(a[0])
-        o[23 + b] = rng.uniform(0, 1)
-        o[24 + b] = rng.uniform(0, 1)
-        o[25 + b:27 + b] = np.sin(a[1]), np.cos(a[1])
-        o[27 + b] = rng.uniform(0, 1)
-        o[28 + b] = rng.uniform(0, 1)
-        o[29 + b] = rng.choice([0.0, 1.0])
-        o[30 + b] = rng.choice([0.0, 1.0])
-        o[31 + b] = rng.uniform(0, 1)
-    # 44-67: two track slots of 12 (same layout)
+        b = FOE_BASE + 8 * s
+        if rng.integers(0, 2) == 0:
+            continue  # absent: the whole slot stays 0
+        any_foe = True
+        o[b] = 1.0                      # present
+        o[b + 1] = rng.uniform(-1, 1)   # dx/960
+        o[b + 2] = rng.uniform(-1, 1)   # dy/640
+        o[b + 3] = rng.uniform(0, 1)    # dist/540
+        a = angle()
+        o[b + 4], o[b + 5] = np.sin(a), np.cos(a)  # bearing - heading
+        o[b + 6] = rng.uniform(0, 1)    # speed
+        o[b + 7] = rng.uniform(0, 1)    # health
+
+    # -- stale track 33-37 --
+    if rng.integers(0, 2) == 1:  # seenNow; else the slot stays 0
+        o[TRACK_BASE] = 1.0
+        o[TRACK_BASE + 1] = rng.uniform(-1, 1)  # dx/960
+        o[TRACK_BASE + 2] = rng.uniform(-1, 1)  # dy/640
+        o[TRACK_BASE + 3] = rng.uniform(0, 1)   # age/600
+        o[TRACK_BASE + 4] = rng.uniform(0, 1)   # dist/960
+
+    # -- bullets 38-73 (6 slots x 6) --
+    for s in range(6):
+        b = BULLET_BASE + 6 * s
+        if rng.integers(0, 2) == 0:
+            continue  # absent: the whole slot stays 0
+        o[b] = 1.0                      # present
+        o[b + 1] = rng.uniform(-1, 1)   # dx/960
+        o[b + 2] = rng.uniform(-1, 1)   # dy/640
+        o[b + 3] = rng.uniform(0, 1)    # dist/540
+        o[b + 4] = rng.uniform(0, 1)    # closing/430
+        o[b + 5] = rng.uniform(0, 1)    # damage/25
+
+    # -- walls 74-77: derived from the sampled self position --
+    o[WALL_BASE] = o[0]             # left/960
+    o[WALL_BASE + 1] = 1.0 - o[0]   # right/960
+    o[WALL_BASE + 2] = o[1]         # top/640
+    o[WALL_BASE + 3] = 1.0 - o[1]   # bottom/640
+
+    # -- zone 78-81 --
+    o[ZONE_BASE] = rng.uniform(0, 1)      # distToSafety/960
+    o[ZONE_BASE + 1] = flag()             # inside
+    o[ZONE_BASE + 2] = rng.uniform(0, 1)  # suddenDeathIn/11400
+    o[ZONE_BASE + 3] = flag()             # shrinking
+
+    # -- turrets 82-93 (2 slots x 6) --
     for s in range(2):
-        b = 44 + s * 12
-        o[b] = rng.choice([0.0, 1.0])
-        o[b + 1:b + 3] = np.sin(a[0]), np.cos(a[0])
-        o[b + 3] = rng.uniform(0, 1)
-        o[b + 4] = rng.uniform(0, 1)
-        o[b + 5:b + 7] = np.sin(a[1]), np.cos(a[1])
-        o[b + 7] = rng.uniform(0, 1)
-        o[b + 8] = rng.uniform(0, 1)
-        o[b + 9] = rng.choice([0.0, 1.0])
-        o[b + 10] = rng.choice([0.0, 1.0])
-        o[b + 11] = rng.uniform(0, 1)
-    # 68-79: 4 powerup slots of 3; 80-91: 4 turret slots of 3
-    for i in range(68, 92):
-        o[i] = rng.uniform(0, 1) if (i - 68) % 3 else rng.choice([0.0, 1.0])
-    # 92-99: one-hot timer; 100-103: match one-hots; 104-111: my skills;
-    # 112-115: foe skills; 116-119: scoreboard; 120-123: timer/pos/vel/score
-    o[92 + rng.integers(0, 8)] = 1.0
-    o[100 + rng.integers(0, 4)] = 1.0
-    o[104:112] = rng.integers(0, 4, 8) / 3.0
-    o[112:116] = rng.integers(0, 4, 4) / 3.0
-    o[116] = rng.uniform(-3, 3)
-    o[117] = rng.uniform(-3, 3)
-    o[118] = rng.uniform(0, 1)
-    o[119] = rng.uniform(0, 1)
-    o[120] = rng.uniform(0, 1)
-    o[121:123] = rng.uniform(0, 1, 2)
-    o[123] = rng.uniform(-3, 3)
-    # Pluto upgrade: the policy consumes 4 stacked frames + a strategy
-    # one-hot (516 dims). Tile one realistic frame x4 + arm-0 one-hot.
-    oh = np.zeros((4,), dtype=np.float64)
+        b = TURRET_BASE + 6 * s
+        if rng.integers(0, 2) == 0:
+            continue  # inactive: the whole slot stays 0
+        o[b] = 1.0                      # active
+        o[b + 1] = rng.uniform(-1, 1)   # dx/960
+        o[b + 2] = rng.uniform(-1, 1)   # dy/640
+        owner = int(rng.integers(0, 3))  # 0 mine, 1 foe's, 2 unowned
+        o[b + 3] = 1.0 if owner == 0 else 0.0   # owned-by-me
+        o[b + 4] = 1.0 if owner == 1 else 0.0   # owned-by-foe
+        o[b + 5] = rng.uniform(-1, 1)   # progress
+
+    # -- pickup pads 94-117 (4 slots x 6) --
+    for s in range(4):
+        b = PAD_BASE + 6 * s
+        if rng.integers(0, 2) == 0:
+            continue  # inactive: the whole slot stays 0
+        o[b] = 1.0                      # active
+        o[b + 1] = rng.uniform(-1, 1)   # dx/960
+        o[b + 2] = rng.uniform(-1, 1)   # dy/640
+        o[b + 3 + int(rng.integers(0, 3))] = 1.0  # kind one-hot
+
+    # -- match 118-121 --
+    o[MATCH_BASE] = float(rng.integers(0, 6)) / 5.0      # killsYou/5
+    o[MATCH_BASE + 1] = float(rng.integers(0, 6)) / 5.0  # killsTeam/5
+    o[MATCH_BASE + 2] = float(rng.integers(0, 4)) / 3.0  # aliveFoes/3
+    o[TICK] = rng.uniform(0, 1)                          # tick/11400
+
+    # -- last-tick events 122-127 --
+    o[EVENT_BASE] = flag()      # wasHit
+    # leadFeat sin/cos (EVENT_BASE+1/+3): a unit-circle pair from one
+    # lead-error angle, or exactly (0, 1) when no foe is visible.
+    if any_foe:
+        a = angle()
+        o[EVENT_BASE + 1] = np.sin(a)
+        o[EVENT_BASE + 3] = np.cos(a)
+    else:
+        o[EVENT_BASE + 1] = 0.0
+        o[EVENT_BASE + 3] = 1.0
+    o[EVENT_BASE + 2] = flag()  # gotKill
+    o[EVENT_BASE + 4] = flag()  # pickup
+    o[EVENT_BASE + 5] = flag()  # turret-captured
+
+    # Pluto upgrade: the policy consumes FRAME_STACK stacked frames
+    # + a strategy one-hot (OBS_DIM = 516). Tile one realistic frame
+    # x FRAME_STACK + arm-0 one-hot.
+    oh = np.zeros((N_STRATS,), dtype=np.float64)
     oh[0] = 1.0
-    return np.concatenate([o, o, o, o, oh])
+    out = np.concatenate([o] * FRAME_STACK + [oh])
+    assert out.shape == (OBS_DIM,)
+    return out
 
 
 ROBOT_TEMPLATE = """// Exported RobotArena RL policy — drop into src/robots/ and register it.

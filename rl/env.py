@@ -33,11 +33,22 @@ FRAME_STACK = 4          # Pluto lesson #1: temporal memory in the net
 N_STRATS = N_STRATEGIES  # strategy-label conditioning (Pluto lesson #4)
 OBS_DIM = FRAME_STACK * FRAME_DIM + N_STRATS  # 516
 OPENING_TICKS = 600      # opening-alignment shaping applies below this tick
-# Named obs indices mirroring bridge/OBS_SPEC.md:7-18.
+# Named obs indices mirroring bridge/OBS_SPEC.md:7-18. The section
+# bases are shared with the export verifier sampler (rl/export_ts.py)
+# so env, sampler, and spec cannot drift apart.
 SELF_SPEED = 6
 FOE_PRESENT = 17
-BULLET_BASE = 38
-TICK = 121
+FOE_BASE = 17     # foes: 2 slots x 8, dims 17-32
+FOE_DIST = 20     # dist dim of foe slot 0 (FOE_BASE + 3)
+TRACK_BASE = 33   # stale track, dims 33-37
+BULLET_BASE = 38  # bullets: 6 slots x 6, dims 38-73
+WALL_BASE = 74    # walls, dims 74-77
+ZONE_BASE = 78    # zone, dims 78-81
+TURRET_BASE = 82  # turrets: 2 slots x 6, dims 82-93
+PAD_BASE = 94     # pickup pads: 4 slots x 6, dims 94-117
+MATCH_BASE = 118  # match, dims 118-121
+TICK = 121        # tick dim (MATCH_BASE + 3)
+EVENT_BASE = 122  # last-tick events, dims 122-127
 NODE_BIN = (shutil.which("node") or "/opt/homebrew/bin/node"
             or "/usr/local/bin/node")
 _BRIDGE_REL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -469,18 +480,18 @@ class RobotArenaEnv(gym.Env):
             # rush: close the foe / kite: open distance (foe slot 0).
             if raw[FOE_PRESENT] < 0.5 or prev[FOE_PRESENT] < 0.5:
                 return 0.0
-            delta = float(prev[20] - raw[20])  # + means closing
+            delta = float(prev[FOE_DIST] - raw[FOE_DIST])  # + means closing
             return max(0.0, delta) if arm == 0 else max(0.0, -delta)
         if arm == 2:
             # greedy: approach nearest active pickup pad (dims 94-117).
-            d0 = _pad_dist(prev, 94, 4)
-            d1 = _pad_dist(raw, 94, 4)
+            d0 = _pad_dist(prev, PAD_BASE, 4)
+            d1 = _pad_dist(raw, PAD_BASE, 4)
             if d0 is None or d1 is None:
                 return 0.0
             return max(0.0, d0 - d1)
         # control: approach nearest active turret (dims 82-93), else center.
-        d0 = _pad_dist(prev, 82, 2)
-        d1 = _pad_dist(raw, 82, 2)
+        d0 = _pad_dist(prev, TURRET_BASE, 2)
+        d1 = _pad_dist(raw, TURRET_BASE, 2)
         if d0 is None or d1 is None:
             cx, cy = float(raw[0]) - 0.5, float(raw[1]) - 0.5
             px, py = float(prev[0]) - 0.5, float(prev[1]) - 0.5
