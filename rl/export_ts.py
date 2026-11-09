@@ -324,8 +324,8 @@ ROBOT_TEMPLATE = """// Exported RobotArena RL policy — drop into src/robots/ a
 import type {{ Intent, RobotController, RobotMeta, SenseState }} from '../sim/types';
 
 export const meta: RobotMeta = {{
-    id: '__ROBOT_ID__',
-    name: '__ROBOT_NAME__',
+    id: __ROBOT_ID__,
+    name: __ROBOT_NAME__,
     author: 'robotarena-rl',
     version: '1.0.0',
     description: 'PPO policy trained with league self-play.',
@@ -420,6 +420,41 @@ export function create(): RobotController {{
     return {{ meta, loadout, update }};
 }}
 """
+
+
+def _single_quoted_ts(value: str) -> str:
+    """Serialize a string as a single-quoted TS string literal.
+
+    The JSON escapes for backslash, double quote and control or
+    non-ASCII characters are all valid inside a TS single-quoted
+    literal; escaping the single quote on top of them means the
+    result can never terminate the literal early.
+    """
+    return "'" + json.dumps(value)[1:-1].replace("'", "\\'") + "'"
+
+
+def build_robot_source(weights: dict, robot_id: str, robot_name: str,
+                       loadout_obj, default_strat: int, builder: str) -> str:
+    """Fill ROBOT_TEMPLATE; operator strings are serialized, never raw."""
+    norm = weights.get("norm") or {"mean": [0.0] * OBS_DIM,
+                                   "var": [1.0] * OBS_DIM,
+                                   "epsilon": 1e-8, "clip_obs": 10.0}
+    robot_src = ROBOT_TEMPLATE \
+        .replace("__ROBOT_ID__", _single_quoted_ts(robot_id)) \
+        .replace("__ROBOT_NAME__", _single_quoted_ts(robot_name)) \
+        .replace("__LOADOUT__", json.dumps(loadout_obj)) \
+        .replace("__ACTION_DIMS__", json.dumps(ACTION_DIMS)) \
+        .replace("__OBS_DIM__", str(OBS_DIM)) \
+        .replace("__WEIGHTS__", json.dumps([l for l in weights["layers"]])) \
+        .replace("__ACTIVATION__", weights["activation"]) \
+        .replace("__NORM_MEAN__", json.dumps(norm["mean"])) \
+        .replace("__NORM_VAR__", json.dumps(norm["var"])) \
+        .replace("__NORM_EPS__", repr(float(norm["epsilon"]))) \
+        .replace("__NORM_CLIP__", repr(float(norm["clip_obs"]))) \
+        .replace("__DEFAULT_STRAT__", str(default_strat)) \
+        .replace("{OBS_BUILDER}", builder)
+    # The template above is written with doubled braces; collapse to real TS.
+    return robot_src.replace("{{", "{").replace("}}", "}")
 
 
 def main() -> None:
@@ -550,25 +585,8 @@ def main() -> None:
         print(f"inlined BULLET_SPEED={bullet_speed} from {const_path}")
     builder = header + f"const BULLET_SPEED = {bullet_speed};\n" + lead_fn + "\n\n" + builder
 
-    norm = weights.get("norm") or {"mean": [0.0] * OBS_DIM,
-                                       "var": [1.0] * OBS_DIM,
-                                       "epsilon": 1e-8, "clip_obs": 10.0}
-    robot_src = ROBOT_TEMPLATE \
-        .replace("__ROBOT_ID__", args.robot_id) \
-        .replace("__ROBOT_NAME__", args.robot_name) \
-        .replace("__LOADOUT__", args.loadout) \
-        .replace("__ACTION_DIMS__", json.dumps(ACTION_DIMS)) \
-        .replace("__OBS_DIM__", str(OBS_DIM)) \
-        .replace("__WEIGHTS__", json.dumps([l for l in weights["layers"]])) \
-        .replace("__ACTIVATION__", weights["activation"]) \
-        .replace("__NORM_MEAN__", json.dumps(norm["mean"])) \
-        .replace("__NORM_VAR__", json.dumps(norm["var"])) \
-        .replace("__NORM_EPS__", repr(float(norm["epsilon"]))) \
-        .replace("__NORM_CLIP__", repr(float(norm["clip_obs"]))) \
-        .replace("__DEFAULT_STRAT__", str(default_strat)) \
-        .replace("{OBS_BUILDER}", builder)
-    # The template above is written with doubled braces; collapse to real TS.
-    robot_src = robot_src.replace("{{", "{").replace("}}", "}")
+    robot_src = build_robot_source(weights, args.robot_id, args.robot_name,
+                                   loadout_obj, default_strat, builder)
 
     robot_path = args.out + ".ts"
     with open(robot_path, "w") as f:
