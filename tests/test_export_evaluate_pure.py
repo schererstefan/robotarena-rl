@@ -21,6 +21,7 @@ module level (expected; CI installs ``requirements.txt``), but nothing
 here instantiates PPO or any environment.
 """
 
+import json
 import math
 
 import numpy as np
@@ -32,7 +33,9 @@ from rl.env import (
     ZONE_BASE,
 )
 from rl.evaluate import BASE_ELO, K, elo_update
-from rl.export_ts import normalize_obs, numpy_forward, sample_realistic_obs
+from rl.export_ts import (
+    build_robot_source, normalize_obs, numpy_forward, sample_realistic_obs,
+)
 
 
 def _weights(layers, activation="tanh", norm=None):
@@ -297,6 +300,97 @@ def test_elo_draw_unequal_ratings_move_toward_each_other():
     assert ra2 > ra  # lower-rated gains from a draw
     assert rb2 < rb  # higher-rated loses from a draw
     assert rb2 - ra2 < rb - ra  # ratings move toward each other
+
+
+# -- build_robot_source: CLI strings cannot break out of the TS literals ----
+#
+# rl/export_ts main() writes <out>.ts for the operator to copy into
+# src/robots/ and register, i.e. generated TypeScript that gets compiled
+# and run. robot_id / robot_name / loadout used to be substituted raw,
+# so a name like "O'Brien" terminated the '...' literal early and the
+# rest landed in executable position. These tests pin the serialized
+# substitution: whatever the operator passes, the meta values stay a
+# single string literal and round-trip to the exact input.
+
+
+def _robot_source(robot_id="rl-ppo", robot_name="RL PPO", loadout=None):
+    weights = {
+        "layers": [{"W": [[1.0]], "b": [0.0]}],
+        "activation": "tanh",
+        "norm": {"mean": [0.0], "var": [1.0],
+                 "epsilon": 1e-8, "clip_obs": 10.0},
+    }
+    if loadout is None:
+        loadout = {"overdrive": 2, "trigger": 2, "plating": 2}
+    return build_robot_source(weights, robot_id, robot_name, loadout, 0,
+                              "function buildObs() { return []; }")
+
+
+def _ts_string_value(src, key):
+    """Decode the single-quoted TS literal assigned to `key` in `src`.
+
+    Scans escape-aware to the closing quote and asserts a comma follows
+    immediately, i.e. the value is exactly one string literal with no
+    tokens leaked after it.
+    """
+    marker = key + ": '"
+    i = src.index(marker) + len(marker)
+    out = []
+    while src[i] != "'":
+        if src[i] == "\\":
+            nxt = src[i + 1]
+            if nxt == "u":
+                out.append(chr(int(src[i + 2:i + 6], 16)))
+                i += 6
+                continue
+            out.append({"n": "\n", "r": "\r", "t": "\t",
+                        "b": "\b", "f": "\f"}.get(nxt, nxt))
+            i += 2
+        else:
+            out.append(src[i])
+            i += 1
+    assert src[i + 1] == ",", "literal must end the meta value: " + src
+    return "".join(out)
+
+
+def test_robot_source_apostrophe_and_backslash_name_stays_one_literal():
+    name = "O'Brien \\ test"
+    src = _robot_source(robot_name=name)
+    assert _ts_string_value(src, "name") == name
+    assert _ts_string_value(src, "id") == "rl-ppo"
+
+
+def test_robot_source_hostile_id_cannot_inject_code():
+    robot_id = "x'; globalThis.pwned = true; //"
+    src = _robot_source(robot_id=robot_id)
+    assert _ts_string_value(src, "id") == robot_id
+
+
+@pytest.mark.parametrize("name", [
+    "O'Brien \\ test",
+    'say "hi"',
+    "back\\slash",
+    "line\nbreak",
+    "café",
+    "both ' and \" and \\",
+])
+def test_robot_source_name_round_trips(name):
+    assert _ts_string_value(_robot_source(robot_name=name), "name") == name
+
+
+def test_robot_source_loadout_is_the_parsed_object():
+    line = next(l for l in _robot_source().splitlines()
+                if l.startswith("export const loadout"))
+    assert json.loads(line.split("=", 1)[1].removesuffix(";")) == {
+        "overdrive": 2, "trigger": 2, "plating": 2}
+
+
+def test_robot_source_defaults_keep_their_generated_shape():
+    lines = _robot_source().splitlines()
+    assert "    id: 'rl-ppo'," in lines
+    assert "    name: 'RL PPO'," in lines
+    assert ('export const loadout = '
+            '{"overdrive": 2, "trigger": 2, "plating": 2};') in lines
 
 
 # -- sample_realistic_obs ---------------------------------------------------
