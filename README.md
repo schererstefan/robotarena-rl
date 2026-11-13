@@ -10,8 +10,8 @@ real game sim running headless.
 ┌─────────────┐  JSONL over stdio   ┌──────────────────────────┐
 │ Python      │◄──────────────────►│ Node bridge (bridge.mjs) │
 │ gymnasium   │  reset/step        │  real Match engine,      │
-│ env + SB3   │  obs[124]          │  tick-for-tick           │
-│ PPO         │  reward            │                          │
+│ env + SB3   │  obs[128] raw /    │  tick-for-tick           │
+│ PPO         │  516 stacked       │                          │
 └─────────────┘                    └──────────────────────────┘
 ```
 
@@ -19,14 +19,23 @@ real game sim running headless.
   `Match` engine tick-for-tick. A bridge-controlled robot returns the pending
   intent queued by Python; the opponent is a scripted registry bot or an
   exported policy snapshot running its MLP in plain TS.
-- **Obs:** 124-dim float vector — self state, 2 nearest foes, stale tracks,
-  6 nearest bullets, walls, safe zone, turrets, pickup pads, match state,
-  last-tick events. See `bridge/OBS_SPEC.md`.
+- **Obs:** 128-dim float vector raw per tick (self state, 2 nearest foes, stale
+  tracks, 6 nearest bullets, walls, safe zone, turrets, pickup pads, match
+  state, last-tick events), 4× frame-stacked plus a 4-dim strategy one-hot =
+  516 policy obs (see `rl/env.py` `FRAME_DIM`/`FRAME_STACK`/`OBS_DIM` and
+  `bridge/OBS_SPEC.md`).
 - **Actions:** `MultiDiscrete([5,5,5,2,2,2,2])` → throttle/turn/towerTurn in
   5 bins (−1…1) + fire/charge/dash/emp booleans.
 - **Reward:** dense damage deltas (±1 per 100 HP) + kill/death (±3) +
   pickup (+0.3) + turret capture (+1) + per-tick urgency (−0.002) +
   terminal win/loss (±15). Configurable in `rl/reward.py`.
+
+## Branches
+
+Default branch `main` is the 124-dim legacy line; live work is on
+`pluto-upgrade` (128 raw / 516 stacked, per `rl/env.py`). This README describes
+the `pluto-upgrade` line. Start with `docs/UPGRADE_SPEC.md` for the design and
+the train/test checklist, and verify with `pytest tests/ -q`.
 
 ## RL best practices baked in
 
@@ -40,14 +49,32 @@ real game sim running headless.
   bootstraps the value instead of learning "draw = death".
 - **Win-rate evals** against fixed scripted bots every N rollouts, plus Elo.
 
+## Prerequisites
+
+The bridge bundles the TypeScript game engine, so you need the sibling
+`robotarena` checkout with `esbuild` installed:
+
+```sh
+git clone https://github.com/schererstefan/robotarena ~/dev/robotarena  # skip if you already have it
+cd ~/dev/robotarena && npm install     # provides node_modules/.bin/esbuild
+export ROBOTARENA_PATH=~/dev/robotarena   # default is /Users/stefan/dev/robotarena
+```
+
+Then create the Python venv (CI runs Python 3.12; 3.14 works locally but is
+not the CI-tested version):
+
+```sh
+python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
 ## Quickstart (Mac mini)
 
 ```sh
-python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./bridge/build.sh            # bundles the TS bridge (needs ROBOTARENA_PATH)
 ./scripts/smoke.sh           # random-policy sanity check
+pytest tests/ -q             # pure tests (no bridge needed)
 ./scripts/train.sh --timesteps 300000   # short run
-tensorboard --logdir runs/<run>/tb
+.venv/bin/tensorboard --logdir runs/<run>/tb
 ```
 
 Full run: `./scripts/train.sh` (10M steps per `configs/ppo_1v1.yaml`).
@@ -57,8 +84,18 @@ Evaluate: `.venv/bin/python -m rl.evaluate --model runs/<run>/model.zip`
 Export a browser-ready robot: `.venv/bin/python -m rl.export_ts --model runs/<run>/model.zip --out export/rl_bot`
 (copy `export/rl_bot.ts` into the game's `src/robots/` and register it).
 
-`ROBOTARENA_PATH` env var points at the game checkout (default
-`/Users/stefan/dev/robotarena`); rebuild the bridge if it moves.
+## Environment variables
+
+| Variable | Default | Consumed by |
+|---|---|---|
+| `ROBOTARENA_PATH` | `/Users/stefan/dev/robotarena` | `bridge/build.sh` (esbuild path), `rl/export_ts.py` |
+| `ROBOTARENA_BRIDGE_RPC_TIMEOUT` | `30.0` s | `rl/env.py` `BRIDGE_RPC_TIMEOUT` |
+| `ROBOTARENA_BRIDGE_SHUTDOWN_TIMEOUT` | `2.0` s | `rl/env.py` `BRIDGE_SHUTDOWN_TIMEOUT` |
+| `ROBOTARENA_BRIDGE_TERMINATE_TIMEOUT` | `3.0` s | `rl/env.py` `BRIDGE_TERMINATE_TIMEOUT` |
+| `CAMP_DIR` | `runs/campaign` | `scripts/campaign.sh` (`CAMP`) |
+| `CONFIG` | `configs/ppo_continue.yaml` | `scripts/campaign.sh` (train config) |
+
+`ROBOTARENA_PATH` points at the game checkout; rebuild the bridge if it moves.
 
 ## Layout
 
