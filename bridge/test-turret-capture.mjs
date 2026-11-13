@@ -9,9 +9,10 @@
 // was foe/neutral, and missed real captures hidden by the same shuffle.
 //
 // Run: node bridge/test-turret-capture.mjs   (exit 0 = pass)
-// Not run by CI: the pure-tests job is Python-only and building the full
-// bridge needs the sibling robotarena checkout. The wiring is guarded in
-// CI by tests/test_turret_capture_contract.py instead.
+// Covered by CI's node-tests job (stock Node only, zero dependencies);
+// building the full bridge / scripts/smoke.sh needs the sibling
+// robotarena checkout and stays out of CI scope. The wiring is also
+// guarded in CI by tests/test_turret_capture_contract.py.
 import assert from 'node:assert/strict';
 
 import {
