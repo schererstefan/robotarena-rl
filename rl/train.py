@@ -518,7 +518,6 @@ def main() -> None:
             **anchor_kwargs,
         )
 
-    rollout = n_steps * n_envs
     # Unique checkpoint prefix per invocation. Resumed runs share run_dir
     # with the run they continue, so a fixed "ppo" prefix interleaves (and
     # ambiguates) checkpoints across stages.
@@ -578,7 +577,8 @@ def main() -> None:
 
     model.save(os.path.join(run_dir, "model.zip"))
     venv.save(os.path.join(run_dir, "vecnormalize.pkl"))
-    export_weights(model, os.path.join(run_dir, "final_weights.json"))
+    export_weights(model, os.path.join(run_dir, "final_weights.json"),
+                   norm=norm_from_vecnormalize(venv))
     with open(os.path.join(run_dir, "done.json"), "w") as f:
         json.dump({"timesteps": model.num_timesteps,
                    "minutes": (time.time() - t0) / 60}, f)
