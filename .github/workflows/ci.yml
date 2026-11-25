@@ -35,6 +35,13 @@ jobs:
           # is not fully reproducible until pinning lands (tracked separately
           # in draft PR #1 — do not pin here).
           pip install -r requirements.txt pytest
+      # Signal-only at first: continue-on-error so a newly disclosed CVE
+      # does not red the gate; Dependabot will surface it as a PR.
+      - name: pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+        continue-on-error: true
       - name: Run pure tests
         run: pytest tests/ -q
       - name: Run dodge check
