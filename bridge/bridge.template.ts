@@ -32,6 +32,7 @@ import type {
 } from '__ROBOTARENA_PATH__/src/sim/types';
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
+import { detectTurretCapture, seedTurretOwners } from './turret-capture.mjs';
 
 // ---------------------------------------------------------------------------
 // Observation spec — 128 dims. Full layout documented in OBS_SPEC.md.
@@ -431,7 +432,9 @@ interface Session {
     ctx: ObsCtx;
     prevHealth: [number, number];
     prevAlive: [boolean, boolean];
-    prevTurretOwner: number[];
+    // Last seen owner per turret position (`x,y`). sense.turrets is
+    // nearest-first, so list index is not identity (turret-capture.mjs).
+    prevTurretOwner: Map<string, number>;
 }
 
 function resolveOpponent(spec: unknown, maxHealth: number): RobotController {
@@ -472,7 +475,7 @@ function newSession(seed: number, opponentSpec: unknown, arena: string, loadout:
         match, rl, ctx,
         prevHealth: [snaps[0]?.health ?? 0, snaps[1]?.health ?? 0],
         prevAlive: [true, true],
-        prevTurretOwner: [-1, -1],
+        prevTurretOwner: new Map(),
     };
 }
 
@@ -512,12 +515,8 @@ function stepSession(s: Session, intent: Partial<Intent>): {
     // Sparse event bonuses lag one tick (sense.events describes the previous step).
     const kinds = new Set((sense.events ?? []).map((e) => e.kind));
     const pickup = kinds.has('pickup');
-    let turret = false;
-    const turrets = sense.turrets ?? [];
-    turrets.forEach((t, i) => {
-        if (t.owner === s.ctx.myTeam && s.prevTurretOwner[i] !== s.ctx.myTeam) turret = true;
-        s.prevTurretOwner[i] = t.owner;
-    });
+    // Position-keyed owner diff: nearest-first order must not alias turrets.
+    const turret = detectTurretCapture(s.prevTurretOwner, sense.turrets ?? [], s.ctx.myTeam);
 
     // Aim error: min |bearing - tower| over visible foes (-1 if none visible).
     // Used for aim-assist shaping (see rl/reward.py).
@@ -575,6 +574,9 @@ async function main(): Promise<void> {
                 // Prime: one idle step so the learner's first obs is post-tick-0.
                 const primed = stepSession(session, {});
                 const sense = session.rl.lastSense();
+                // Baseline turret owners from the primed sense: already owned
+                // at match start must never pay as a capture on the first step.
+                seedTurretOwners(session.prevTurretOwner, sense?.turrets ?? []);
                 out({
                     type: 'reset',
                     obs: primed.obs,

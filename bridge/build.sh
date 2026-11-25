@@ -14,6 +14,9 @@ fi
 mkdir -p "$SCRIPT_DIR/dist"
 sed "s#__ROBOTARENA_PATH__#${ROBOTARENA_PATH}#g" \
   "$SCRIPT_DIR/bridge.template.ts" > "$SCRIPT_DIR/dist/bridge.gen.ts"
+# The template imports ./turret-capture.mjs; the generated file lives in
+# dist/, so stage the helper beside it for esbuild to bundle.
+cp "$SCRIPT_DIR/turret-capture.mjs" "$SCRIPT_DIR/dist/turret-capture.mjs"
 
 "$ESBUILD" "$SCRIPT_DIR/dist/bridge.gen.ts" \
   --bundle --platform=node --format=esm \

@@ -1,8 +1,8 @@
-# Scope is pure tests + dodge guard + compileall only. The dodge guard
-# (scripts/dodge_check.py) is pure Python and runs as part of this gate.
-# The Node-bridge smoke test (scripts/smoke.sh) is intentionally NOT
-# run here because it needs the sibling robotarena checkout and a built
-# bridge, unavailable on stock hosted runners.
+# Scope is pure tests + dodge guard + compileall + the zero-dep Node
+# turret-capture test (bridge/test-turret-capture.mjs, stock Node only).
+# The full Node-bridge build / smoke test (scripts/smoke.sh) is
+# intentionally NOT run here because it needs the sibling robotarena
+# checkout and a built bridge, unavailable on stock hosted runners.
 name: CI
 
 on:
@@ -41,3 +41,13 @@ jobs:
         run: python scripts/dodge_check.py
       - name: Compile check
         run: python -m compileall rl scripts
+  node-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run turret-capture test
+        run: node bridge/test-turret-capture.mjs
